@@ -45,8 +45,14 @@ def render_overlay(
     results: list[RefinementResult] | None = None,
     class_names: dict[int, str] | None = None,
     show_labels: bool = True,
+    coord_scale: float = 1.0,
 ) -> Image.Image:
-    """Draw source boxes and refined polygons onto a copy of ``image``."""
+    """Draw source boxes and refined polygons onto a copy of ``image``.
+
+    ``coord_scale`` multiplies annotation coordinates, so a caller can downscale the
+    image first and still draw correctly. Drawing on a small canvas rather than a
+    full-resolution one is dramatically cheaper for review-only artifacts.
+    """
     canvas = image.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas, "RGBA")
     results = results or []
@@ -56,7 +62,7 @@ def render_overlay(
     width = max(2, int(round(2 * scale)))
 
     for idx, ann in enumerate(annotations):
-        x0, y0, x1, y1 = ann.bbox_xyxy
+        x0, y0, x1, y1 = (c * coord_scale for c in ann.bbox_xyxy)
         draw.rectangle((x0, y0, x1, y1), outline=BOX_COLOR, width=width)
 
         if idx >= len(results):
@@ -67,7 +73,7 @@ def render_overlay(
         line = ACCEPTED_LINE if accepted else REVIEW_LINE
 
         for ring in result.export_rings:
-            points = [(float(px), float(py)) for px, py in ring]
+            points = [(px * coord_scale, py * coord_scale) for px, py in ring]
             if len(points) >= 3:
                 draw.polygon(points, fill=fill, outline=line)
 
@@ -110,16 +116,20 @@ def render_comparison(
     This is the artifact for judging a conversion at a glance: what went in on the
     left, what came out on the right, same scale, same crop.
     """
-    boxes_only = render_overlay(image, annotations, results=None, class_names=class_names)
-    with_masks = render_overlay(image, annotations, results, class_names)
-
-    # Downscale for review; a pair of 4K frames is unwieldy and slow to open.
+    # Downscale the source *once*, then draw on the small canvases. Rendering two
+    # full-resolution overlays and resizing both cost ~570 ms per 4K image — more
+    # than the SAM image encoder itself — for an artifact that is only ever looked at.
     panel_width = max(1, (max_width - gap) // 2)
-    if boxes_only.width > panel_width:
-        scale = panel_width / boxes_only.width
-        size = (panel_width, max(1, int(round(boxes_only.height * scale))))
-        boxes_only = boxes_only.resize(size, Image.LANCZOS)
-        with_masks = with_masks.resize(size, Image.LANCZOS)
+    source = image.convert("RGB")
+    coord_scale = 1.0
+    if source.width > panel_width:
+        coord_scale = panel_width / source.width
+        source = source.resize(
+            (panel_width, max(1, round(source.height * coord_scale))), Image.BILINEAR
+        )
+
+    boxes_only = render_overlay(source, annotations, None, class_names, coord_scale=coord_scale)
+    with_masks = render_overlay(source, annotations, results, class_names, coord_scale=coord_scale)
 
     width = boxes_only.width * 2 + gap
     header = max(22, int(boxes_only.height * 0.035))

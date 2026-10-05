@@ -351,6 +351,9 @@ def seed_other_backend_output(ds_path: Path, out: Path) -> None:
     ds = scan_dataset(ds_path)
     engine = SmartRefinementEngine(ds, FallbackBackend(), out, ConversionSettings(preset="fast"))
     engine.process_record(ds.records[0], resume=False)
+    # Drain before returning: the caller may delete this folder, and leaving
+    # writers running inside a directory being removed deadlocks the test.
+    assert engine.wait_for_writes() == []
 
 
 def test_conflicting_output_offers_a_new_folder_before_starting(qapp, window, dataset, tmp_path, monkeypatch):

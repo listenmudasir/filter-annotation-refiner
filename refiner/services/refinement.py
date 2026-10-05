@@ -4,7 +4,9 @@ import csv
 import json
 import os
 import shutil
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -50,6 +52,9 @@ class ConversionSettings:
     #: Write a side-by-side "input boxes | output masks" image per converted image.
     save_comparisons: bool = True
     overlay_quality: int = 88
+    #: Background threads for overlay/comparison/mask writing. These overlap the
+    #: next image's GPU work; 0 writes inline.
+    io_workers: int = 3
     link_images: bool = True
     #: Written polygons whose round-trip IoU against the SAM mask falls below this
     #: are sent to review regardless of their other scores.
@@ -137,6 +142,14 @@ class SmartRefinementEngine:
         # the converter behaves sensibly on data it has never seen.
         self.profiles = derive_profiles(class_boxes(dataset), dataset.class_names)
         self.profile_overrides: dict[int, ClassProfile] = {}
+        # Created on first use: constructing the engine can still fail (see
+        # _guard_run_provenance), and a pool made before that would leave
+        # non-daemon threads behind that block interpreter shutdown.
+        self._io_workers = max(0, settings.io_workers)
+        self._io_pool: ThreadPoolExecutor | None = None
+        # Bound in-flight images so queued masks cannot grow without limit.
+        self._io_slots = threading.Semaphore(max(1, self._io_workers * 2))
+        self._io_errors: list[str] = []
         self.state = ProjectState(self.output_root)
         self._guard_run_provenance()
         self.report_dir = self.output_root / "reports"
@@ -545,8 +558,8 @@ class SmartRefinementEngine:
         tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
         tmp.replace(out_label)
         if self.settings.save_masks:
-            self._save_masks(record, results)
-        self._save_visual_review(record, results)
+            self._submit_io(self._save_masks, record, results)
+        self._submit_io(self._save_visual_review, record, results)
         self._append_reports(record, results, out_label)
         self.state.mark_completed(
             record.relative_image,
@@ -580,6 +593,41 @@ class SmartRefinementEngine:
         # temp name ends in .tmp, which it does not recognise.
         canvas.save(tmp, format="JPEG", quality=self.settings.overlay_quality)
         tmp.replace(path)
+
+    def _submit_io(self, fn, *args) -> None:
+        """Queue background work, blocking if the writers fall behind.
+
+        Overlay rendering and JPEG encoding are pure CPU and release the GIL, so
+        running them off the inference thread lets them overlap the *next* image's
+        GPU work instead of serialising behind it. The semaphore bounds how many
+        images' masks can be held in memory at once.
+        """
+        if not self._io_workers:
+            fn(*args)
+            return
+        if self._io_pool is None:
+            self._io_pool = ThreadPoolExecutor(
+                max_workers=self._io_workers, thread_name_prefix="far-io"
+            )
+        self._io_slots.acquire()
+
+        def run() -> None:
+            try:
+                fn(*args)
+            except Exception as exc:  # a review artifact must not kill a run
+                self._io_errors.append(f"{type(exc).__name__}: {exc}")
+            finally:
+                self._io_slots.release()
+
+        self._io_pool.submit(run)
+
+    def wait_for_writes(self) -> list[str]:
+        """Drain queued artifact writes. Must run before the summary is written."""
+        if self._io_pool is None:
+            return []
+        self._io_pool.shutdown(wait=True)
+        self._io_pool = None
+        return list(self._io_errors)
 
     def _save_visual_review(self, record: ImageRecord, results: list[RefinementResult]) -> None:
         """Write the overlays an operator uses to eyeball the conversion.

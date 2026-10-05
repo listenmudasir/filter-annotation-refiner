@@ -174,6 +174,7 @@ def test_comparison_images_are_written(tmp_path: Path):
     out = tmp_path / "out"
     engine = SmartRefinementEngine(ds, FallbackBackend(), out, ConversionSettings(preset="fast"))
     engine.process_record(ds.records[0], resume=False)
+    assert engine.wait_for_writes() == []
 
     comparisons = list((out / "comparisons").rglob("*.jpg"))
     assert len(comparisons) == 1
@@ -191,7 +192,55 @@ def test_comparisons_can_be_disabled(tmp_path: Path):
         ds, FallbackBackend(), out, ConversionSettings(preset="fast", save_comparisons=False)
     )
     engine.process_record(ds.records[0], resume=False)
+    assert engine.wait_for_writes() == []
     assert not (out / "comparisons").exists()
+
+
+def test_background_writers_produce_the_same_files(tmp_path: Path):
+    """Threaded artifact writing must not change what lands on disk."""
+    outputs = {}
+    for workers in (0, 3):
+        src = make_dataset(tmp_path / f"w{workers}", size=(200, 100))
+        ds = scan_dataset(src)
+        out = tmp_path / f"out{workers}"
+        engine = SmartRefinementEngine(
+            ds, FallbackBackend(), out, ConversionSettings(preset="fast", io_workers=workers)
+        )
+        engine.process_record(ds.records[0], resume=False)
+        assert engine.wait_for_writes() == []
+        outputs[workers] = sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()
+        )
+    assert outputs[0] == outputs[3]
+    assert any("comparisons/" in p for p in outputs[3])
+    assert not any(p.endswith(".tmp") for p in outputs[3])
+
+
+def test_failed_artifact_write_is_reported_not_raised(tmp_path: Path):
+    """A broken overlay must not abort a conversion, but must be surfaced."""
+    src = make_dataset(tmp_path)
+    ds = scan_dataset(src)
+    engine = SmartRefinementEngine(
+        ds, FallbackBackend(), tmp_path / "out", ConversionSettings(preset="fast", io_workers=2)
+    )
+
+    def boom(*_args):
+        raise OSError("disk full")
+
+    engine._submit_io(boom, None)
+    errors = engine.wait_for_writes()
+    assert errors and "disk full" in errors[0]
+
+
+def test_wait_for_writes_is_safe_to_call_twice(tmp_path: Path):
+    src = make_dataset(tmp_path)
+    ds = scan_dataset(src)
+    engine = SmartRefinementEngine(
+        ds, FallbackBackend(), tmp_path / "out", ConversionSettings(preset="fast")
+    )
+    engine.process_record(ds.records[0], resume=False)
+    assert engine.wait_for_writes() == []
+    assert engine.wait_for_writes() == []
 
 
 def test_report_schema_mismatch_is_refused(tmp_path: Path):

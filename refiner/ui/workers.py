@@ -113,6 +113,12 @@ class ConversionWorker(QObject):
                     self.progress.emit(i, total, (record, message))
                 self.statistics.emit(dict(stats))
 
+            # Artifact writing runs on background threads; drain it before the
+            # summary so the reports describe a finished output folder.
+            self.status.emit("Finishing writes…")
+            for message in engine.wait_for_writes():
+                self.status.emit(f"Artifact write failed: {message}")
+
             if cancelled:
                 self.status.emit("Stopped. Images completed before the stop are saved.")
             stats["cancelled"] = cancelled
