@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.pt
+*.pth
+*.ckpt
+sam_refined/
+*_sam_refined/
+
+# Generated datasets and demo data
+demo_dataset/
+*_refined/
+overlays/
+comparisons/
+review_previews/
+reports/
+
+# Model checkpoints and weights
+*.safetensors
+checkpoints/
+
+# Local UI preferences
+ui.json
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

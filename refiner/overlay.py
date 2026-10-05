@@ -1,0 +1,136 @@
+"""Single renderer for mask overlays.
+
+The same drawing is needed by the live preview, the saved per-image overlays and
+the review previews. Keeping one implementation means what the operator inspects
+on screen is pixel-for-pixel what gets written to disk for manual review.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from PIL import Image, ImageDraw, ImageFont
+
+from .models import Annotation, RefinementResult, ReviewState
+
+BOX_COLOR = (82, 154, 255, 230)
+ACCEPTED_FILL = (31, 207, 135, 90)
+ACCEPTED_LINE = (31, 207, 135, 240)
+REVIEW_FILL = (255, 183, 65, 105)
+REVIEW_LINE = (255, 183, 65, 240)
+TEXT_COLOR = (240, 246, 252, 255)
+TEXT_SHADOW = (8, 14, 22, 220)
+
+
+@lru_cache(maxsize=64)
+def _font(size: int) -> ImageFont.ImageFont:
+    for name in ("DejaVuSans.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _text(draw: ImageDraw.ImageDraw, xy, text: str, font) -> None:
+    x, y = xy
+    # Defect imagery is low contrast; a shadow keeps labels readable on any background.
+    draw.text((x + 1, y + 1), text, fill=TEXT_SHADOW, font=font)
+    draw.text((x, y), text, fill=TEXT_COLOR, font=font)
+
+
+def render_overlay(
+    image: Image.Image,
+    annotations: list[Annotation],
+    results: list[RefinementResult] | None = None,
+    class_names: dict[int, str] | None = None,
+    show_labels: bool = True,
+) -> Image.Image:
+    """Draw source boxes and refined polygons onto a copy of ``image``."""
+    canvas = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    results = results or []
+    class_names = class_names or {}
+
+    scale = max(1.0, canvas.width / 1200)
+    width = max(2, int(round(2 * scale)))
+
+    for idx, ann in enumerate(annotations):
+        x0, y0, x1, y1 = ann.bbox_xyxy
+        draw.rectangle((x0, y0, x1, y1), outline=BOX_COLOR, width=width)
+
+        if idx >= len(results):
+            continue
+        result = results[idx]
+        accepted = result.state == ReviewState.ACCEPTED
+        fill = ACCEPTED_FILL if accepted else REVIEW_FILL
+        line = ACCEPTED_LINE if accepted else REVIEW_LINE
+
+        for ring in result.export_rings:
+            points = [(float(px), float(py)) for px, py in ring]
+            if len(points) >= 3:
+                draw.polygon(points, fill=fill, outline=line)
+
+        if not show_labels:
+            continue
+        name = class_names.get(ann.class_id, f"class_{ann.class_id}")
+        label = f"{name}  Q{result.quality:.2f}  F{result.polygon_fidelity:.2f}"
+        if result.part_count > 1:
+            label += f"  x{result.part_count}"
+
+        # Size the caption against the box, not the image: a 200px defect on a 4K
+        # frame would otherwise get a 44pt label sprawling across its neighbours.
+        box_width = max(1.0, x1 - x0)
+        size = int(round(min(13 * scale, max(11.0, box_width / 6))))
+        font = _font(max(11, size))
+        text_width = draw.textlength(label, font=font)
+        # Keep the caption on-canvas when the box sits near the right edge.
+        tx = min(float(x0) + 3, max(0.0, canvas.width - text_width - 2))
+        ty = max(2.0, y0 - size * 1.25)
+        _text(draw, (tx, ty), label, font)
+
+    return canvas
+
+
+def render_record_overlay(image_path, annotations, results=None, class_names=None) -> Image.Image:
+    with Image.open(image_path) as img:
+        return render_overlay(img, annotations, results, class_names)
+
+
+def render_comparison(
+    image: Image.Image,
+    annotations: list[Annotation],
+    results: list[RefinementResult] | None = None,
+    class_names: dict[int, str] | None = None,
+    gap: int = 12,
+    max_width: int = 2600,
+) -> Image.Image:
+    """Input detection boxes beside the segmentation masks they produced.
+
+    This is the artifact for judging a conversion at a glance: what went in on the
+    left, what came out on the right, same scale, same crop.
+    """
+    boxes_only = render_overlay(image, annotations, results=None, class_names=class_names)
+    with_masks = render_overlay(image, annotations, results, class_names)
+
+    # Downscale for review; a pair of 4K frames is unwieldy and slow to open.
+    panel_width = max(1, (max_width - gap) // 2)
+    if boxes_only.width > panel_width:
+        scale = panel_width / boxes_only.width
+        size = (panel_width, max(1, int(round(boxes_only.height * scale))))
+        boxes_only = boxes_only.resize(size, Image.LANCZOS)
+        with_masks = with_masks.resize(size, Image.LANCZOS)
+
+    width = boxes_only.width * 2 + gap
+    header = max(22, int(boxes_only.height * 0.035))
+    canvas = Image.new("RGB", (width, boxes_only.height + header), (12, 18, 26))
+    canvas.paste(boxes_only, (0, header))
+    canvas.paste(with_masks, (boxes_only.width + gap, header))
+
+    draw = ImageDraw.Draw(canvas)
+    font = _font(max(12, int(header * 0.62)))
+    _text(draw, (6, max(1, (header - font.size if hasattr(font, "size") else header) // 2)),
+          "INPUT  ·  detection boxes", font)
+    _text(draw, (boxes_only.width + gap + 6, max(1, (header - (font.size if hasattr(font, "size") else header)) // 2)),
+          "OUTPUT  ·  segmentation masks", font)
+    return canvas
