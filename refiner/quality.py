@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .geometry import box_mask, mask_iou
+from .geometry import box_mask, mask_area, mask_iou
 
 
 def connected_components(mask: np.ndarray) -> tuple[int, list[int]]:
@@ -24,10 +24,11 @@ def fragmentation_penalty(mask: np.ndarray, min_area: int = 4) -> float:
 
 def leakage_fraction(mask: np.ndarray, bbox: tuple[float, float, float, float], width: int, height: int, allowance: float = 0.12) -> float:
     allowed = box_mask(bbox, width, height, expand=allowance)
-    area = int(mask.sum())
+    area = mask_area(mask)
     if area == 0:
         return 1.0
-    outside = np.logical_and(mask, ~allowed).sum()
+    # mask & ~allowed in one pass, counted without materialising a sum reduction.
+    outside = int(np.count_nonzero(mask & ~allowed))
     return float(outside / area)
 
 
@@ -77,7 +78,9 @@ def consensus_stability(mask: np.ndarray, masks: list[np.ndarray]) -> float:
     """
     if not masks:
         return 0.0
-    ious = sorted((mask_iou(mask, m) for m in masks), reverse=True)
+    # One mask against many: count its pixels once rather than inside every compare.
+    area = mask_area(mask)
+    ious = sorted((mask_iou(mask, m, area_a=area) for m in masks), reverse=True)
     # Ignore self-IoU when present and average the closest third, at least two neighbors.
     if ious and ious[0] > 0.999:
         ious = ious[1:]

@@ -43,11 +43,33 @@ def polygon_to_mask(points: list[tuple[float, float]], width: int, height: int) 
     return mask.astype(bool)
 
 
-def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
-    a = a.astype(bool)
-    b = b.astype(bool)
-    inter = np.logical_and(a, b).sum()
-    union = np.logical_or(a, b).sum()
+def mask_area(mask: np.ndarray) -> int:
+    """Set-pixel count. ``count_nonzero`` beats ``.sum()`` on boolean arrays."""
+    return int(np.count_nonzero(mask))
+
+
+def mask_iou(a: np.ndarray, b: np.ndarray, area_a: int | None = None, area_b: int | None = None) -> float:
+    """IoU of two boolean masks.
+
+    This is the hottest function in the pipeline - consensus clustering and
+    stability scoring call it on the order of 27 times per object. Two details
+    matter at that rate:
+
+    * ``|a ∪ b| = |a| + |b| - |a ∩ b|``, so only the intersection needs computing;
+      that halves the element-wise work versus evaluating the union directly.
+    * Pass ``area_a``/``area_b`` when comparing one mask against many to avoid
+      recounting the same mask every time.
+    """
+    if a.dtype != bool:
+        a = a.astype(bool, copy=False)
+    if b.dtype != bool:
+        b = b.astype(bool, copy=False)
+    inter = int(np.count_nonzero(a & b))
+    if area_a is None:
+        area_a = mask_area(a)
+    if area_b is None:
+        area_b = mask_area(b)
+    union = area_a + area_b - inter
     return float(inter / union) if union else 1.0
 
 

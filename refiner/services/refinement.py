@@ -19,6 +19,7 @@ from PIL import Image
 from ..backend.base import SegmentationBackend
 from ..dataset import class_boxes
 from ..geometry import (
+    mask_area,
     mask_iou,
     mask_to_polygons,
     parts_to_export_rings,
@@ -370,11 +371,13 @@ Source labels were never modified.
         if min_area <= 1:
             return mask.astype(bool)
         n, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
-        out = np.zeros_like(mask, dtype=np.uint8)
-        for i in range(1, n):
-            if int(stats[i, cv2.CC_STAT_AREA]) >= min_area:
-                out[labels == i] = 1
-        return out.astype(bool)
+        if n <= 1:
+            return np.zeros_like(mask, dtype=bool)
+        # One lookup over the label image instead of a full-array comparison per
+        # component; a fragmented hair mask can have dozens of components.
+        keep = stats[:, cv2.CC_STAT_AREA] >= min_area
+        keep[0] = False  # label 0 is background
+        return keep[labels]
 
     def _postprocess(self, mask: np.ndarray, profile: ClassProfile) -> np.ndarray:
         m = mask.astype(np.uint8)
@@ -429,7 +432,8 @@ Source labels were never modified.
         if len(candidates) < 2:
             return None
         best = max(candidates, key=lambda c: c.sam_score)
-        cluster = [c for c in candidates if mask_iou(best.mask, c.mask) >= 0.55]
+        best_area = mask_area(best.mask)
+        cluster = [c for c in candidates if mask_iou(best.mask, c.mask, area_a=best_area) >= 0.55]
         if len(cluster) < 2:
             return None
         weights = np.asarray([max(0.05, c.sam_score) for c in cluster], dtype=np.float32)
