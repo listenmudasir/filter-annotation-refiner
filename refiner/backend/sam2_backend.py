@@ -229,7 +229,10 @@ class Sam2Backend(SegmentationBackend):
         self.image_size = rgb.size
         try:
             with self._torch.inference_mode(), self._autocast():
-                self.predictor.set_image(np.asarray(rgb))
+                # np.asarray() on a PIL image is read-only, which makes torchvision
+                # warn about non-writable tensors on the first image of every run.
+                # It copies internally anyway, so hand it a writable array.
+                self.predictor.set_image(np.array(rgb))
         except Exception as exc:
             raise RuntimeError(f"SAM 2 failed to encode a {rgb.size[0]}x{rgb.size[1]} image: {exc}") from exc
 
