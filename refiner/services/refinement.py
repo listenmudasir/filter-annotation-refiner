@@ -56,6 +56,9 @@ class ConversionSettings:
     #: Background threads for overlay/comparison/mask writing. These overlap the
     #: next image's GPU work; 0 writes inline.
     io_workers: int = 3
+    #: Threads refining objects within an image. >1 overlaps CPU post-processing
+    #: with the next object's GPU prompting; 0 or 1 keeps it serial.
+    cpu_workers: int = 4
     link_images: bool = True
     #: Written polygons whose round-trip IoU against the SAM mask falls below this
     #: are sent to review regardless of their other scores.
@@ -166,6 +169,14 @@ class SmartRefinementEngine:
         # Bound in-flight images so queued masks cannot grow without limit.
         self._io_slots = threading.Semaphore(max(1, self._io_workers * 2))
         self._io_errors: list[str] = []
+        # Refinement is numpy/OpenCV, which release the GIL, so threads give real
+        # parallelism here. Sized well under the core count to leave room for the
+        # artifact writers and the GUI.
+        cpu_workers = max(0, settings.cpu_workers)
+        self._cpu_pool = (
+            ThreadPoolExecutor(max_workers=cpu_workers, thread_name_prefix="far-cpu")
+            if cpu_workers > 1 else None
+        )
         self.state = ProjectState(self.output_root)
         self._guard_run_provenance()
         # The deliverable and the QA material are separated. Previously nine
@@ -461,14 +472,51 @@ Source labels were never modified.
             int(min(height, np.ceil(y1 + margin))),
         )
 
+    def _refine_all(self, record, image_rgb, edges, check_cancelled) -> list[RefinementResult]:
+        """Refine every object in an image, overlapping GPU fetch with CPU work.
+
+        Profiling showed the GPU idle ~85% of the time: the encoder and decoder are
+        fast, and the wall clock went on single-threaded mask metrics, morphology
+        and polygon conversion running *between* SAM calls. Prompting is still
+        serial - one predictor holds one cached image embedding - but the
+        refinement of object N now proceeds while object N+1 is being prompted,
+        and several objects refine at once.
+        """
+        annotations = record.annotations
+        preset = self.settings.preset
+        if self._cpu_pool is None or len(annotations) < 2:
+            out = []
+            for ann in annotations:
+                check_cancelled()
+                name = self.dataset.class_names.get(ann.class_id, f"class_{ann.class_id}")
+                out.append(self.refine_annotation(image_rgb, ann, name, edges))
+            return out
+
+        futures = []
+        for ann in annotations:
+            check_cancelled()
+            candidates = self.backend.candidates(ann, preset)
+            name = self.dataset.class_names.get(ann.class_id, f"class_{ann.class_id}")
+            futures.append(
+                self._cpu_pool.submit(
+                    self.refine_annotation, image_rgb, ann, name, edges, candidates
+                )
+            )
+        return [f.result() for f in futures]
+
     def refine_annotation(
         self,
         image_rgb: np.ndarray,
         annotation: Annotation,
         class_name: str = "",
         edges: np.ndarray | None = None,
+        raw_candidates: list[CandidateMask] | None = None,
     ) -> RefinementResult:
-        raw_candidates = self.backend.candidates(annotation, self.settings.preset)
+        # Candidates may be supplied by the caller so the GPU fetch (which must be
+        # serial - one predictor, one cached embedding) can be separated from this
+        # CPU-bound refinement, which can run on several cores at once.
+        if raw_candidates is None:
+            raw_candidates = self.backend.candidates(annotation, self.settings.preset)
         if not raw_candidates:
             raise RuntimeError("No segmentation candidates returned")
         profile = profile_for(annotation.class_id, self.profiles, self.profile_overrides)
@@ -598,16 +646,12 @@ Source labels were never modified.
             self.backend.set_image(pil)
             # One Canny pass per image, shared by every candidate of every object.
             edges = canny_edges(image_rgb)
-            results: list[RefinementResult] = []
             lines: list[str] = []
-            for ann in record.annotations:
-                check_cancelled()
-                class_name = self.dataset.class_names.get(ann.class_id, f"class_{ann.class_id}")
-                result = self.refine_annotation(image_rgb, ann, class_name, edges)
+            results = self._refine_all(record, image_rgb, edges, check_cancelled)
+            for ann, result in zip(record.annotations, results):
                 lines.extend(
                     polygons_to_yolo_lines(ann.class_id, result.export_rings, record.width, record.height)
                 )
-                results.append(result)
             self.backend.close_image()
 
         tmp = out_label.with_suffix(".txt.tmp")
@@ -683,6 +727,9 @@ Source labels were never modified.
             return []
         self._io_pool.shutdown(wait=True)
         self._io_pool = None
+        if self._cpu_pool is not None:
+            self._cpu_pool.shutdown(wait=True)
+            self._cpu_pool = None
         return list(self._io_errors)
 
     def _save_visual_review(self, record: ImageRecord, results: list[RefinementResult]) -> None:
