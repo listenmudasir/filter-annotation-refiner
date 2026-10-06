@@ -163,3 +163,36 @@ def test_max_parts_keeps_largest():
 def test_legacy_single_polygon_helper_still_works():
     poly = mask_to_polygon(ring(), 0.5)
     assert len(poly) >= 3
+
+
+def test_boxes_are_drawn_on_top_of_masks():
+    """Regression: a translucent mask painted over its own box erased the box.
+
+    With overlapping objects a later mask also covered earlier boxes, so the
+    detection input became invisible in overlays and the live preview.
+    """
+    import numpy as np
+    from PIL import Image as PILImage
+
+    from refiner.geometry import MaskPolygon
+    from refiner.models import Annotation, AnnotationKind, RefinementResult, ReviewState
+    from refiner.overlay import BOX_COLOR, render_overlay
+
+    image = PILImage.new("RGB", (400, 300), "black")
+    box = (50.0, 50.0, 350.0, 250.0)
+    # A mask that completely covers its own box, plus the next object's box.
+    ring = [(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]
+    ann = Annotation(0, AnnotationKind.DETECTION, box)
+    result = RefinementResult(
+        mask=np.zeros((300, 400), bool), polygons=[MaskPolygon(ring)], export_rings=[ring],
+        polygon_fidelity=0.99, sam_score=0.9, stability=0.9, edge_alignment=0.5,
+        leakage=0.0, fragmentation=0.0, quality=0.85,
+        source_kind=AnnotationKind.DETECTION, prompt_name="p", state=ReviewState.ACCEPTED,
+    )
+
+    rendered = np.asarray(render_overlay(image, [ann, ann], [result, result]))
+    # Sample the top edge of the box; it must still carry the box colour.
+    strip = rendered[48:54, 150:250].reshape(-1, 3).astype(int)
+    target = np.asarray(BOX_COLOR[:3], dtype=int)
+    closest = np.abs(strip - target).sum(axis=1).min()
+    assert closest < 60, f"box edge was painted over by the mask (closest={closest})"

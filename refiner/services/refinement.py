@@ -70,6 +70,21 @@ def describe_output_conflict(output_root: Path, backend_name: str, preset: str) 
     output_root = Path(output_root).expanduser()
     if not output_root.exists():
         return None
+
+    # A folder written before the dataset/ + qa/ split holds its labels at the top
+    # level. Resume keys on the *new* label path, which does not exist there, so the
+    # run would silently start over and write a second dataset alongside the first -
+    # two parallel copies in one folder, neither obviously authoritative.
+    legacy_labels = output_root / "labels"
+    if legacy_labels.is_dir() and next(legacy_labels.rglob("*.txt"), None) is not None:
+        return (
+            f"{output_root} uses the older flat layout, where labels sit at the top "
+            "level rather than under dataset/.\n"
+            "Converting into it again would not resume; it would write a second, "
+            "parallel dataset beside the first.\n"
+            "Convert into a new output folder, or delete the existing one to start over."
+        )
+
     state = ProjectState(output_root.resolve())
     if not state.has_progress:
         return None

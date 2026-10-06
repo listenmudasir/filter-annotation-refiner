@@ -257,3 +257,39 @@ def test_report_schema_mismatch_is_refused(tmp_path: Path):
         assert "incompatible version" in str(exc)
     else:
         raise AssertionError("an older report schema must not be appended to")
+
+
+def test_legacy_flat_output_is_refused_rather_than_duplicated(tmp_path: Path):
+    """Regression: converting into a pre-split output wrote a second dataset.
+
+    Resume keys on the new dataset/labels path, which does not exist in a flat
+    folder, so the run silently started over and left two parallel datasets in
+    one folder.
+    """
+    from refiner.services.refinement import describe_output_conflict
+
+    out = tmp_path / "old_output"
+    (out / "labels" / "train").mkdir(parents=True)
+    (out / "labels" / "train" / "x.txt").write_text("0 0.1 0.1 0.2 0.2 0.3 0.3\n")
+
+    conflict = describe_output_conflict(out, "sam2", "balanced")
+    assert conflict is not None
+    assert "older flat layout" in conflict
+    assert "parallel dataset" in conflict
+
+
+def test_new_layout_output_is_not_mistaken_for_legacy(tmp_path: Path):
+    from refiner.services.refinement import describe_output_conflict
+
+    out = tmp_path / "new_output"
+    (out / "dataset" / "labels" / "train").mkdir(parents=True)
+    (out / "dataset" / "labels" / "train" / "x.txt").write_text("0 0.1 0.1 0.2 0.2 0.3 0.3\n")
+    assert describe_output_conflict(out, "sam2", "balanced") is None
+
+
+def test_empty_output_folder_is_fine(tmp_path: Path):
+    from refiner.services.refinement import describe_output_conflict
+
+    out = tmp_path / "fresh"
+    out.mkdir()
+    assert describe_output_conflict(out, "sam2", "balanced") is None

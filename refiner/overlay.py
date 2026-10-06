@@ -61,24 +61,28 @@ def render_overlay(
     scale = max(1.0, canvas.width / 1200)
     width = max(2, int(round(2 * scale)))
 
+    # Two passes. A single pass painted each box then its own translucent mask
+    # over it, so every box was washed out by its own mask and, where objects
+    # overlap, by later ones too. Masks go down first; boxes and captions stay crisp.
     for idx, ann in enumerate(annotations):
-        x0, y0, x1, y1 = (c * coord_scale for c in ann.bbox_xyxy)
-        draw.rectangle((x0, y0, x1, y1), outline=BOX_COLOR, width=width)
-
         if idx >= len(results):
             continue
         result = results[idx]
         accepted = result.state == ReviewState.ACCEPTED
         fill = ACCEPTED_FILL if accepted else REVIEW_FILL
         line = ACCEPTED_LINE if accepted else REVIEW_LINE
-
         for ring in result.export_rings:
             points = [(px * coord_scale, py * coord_scale) for px, py in ring]
             if len(points) >= 3:
                 draw.polygon(points, fill=fill, outline=line)
 
-        if not show_labels:
+    for idx, ann in enumerate(annotations):
+        x0, y0, x1, y1 = (c * coord_scale for c in ann.bbox_xyxy)
+        draw.rectangle((x0, y0, x1, y1), outline=BOX_COLOR, width=width)
+
+        if idx >= len(results) or not show_labels:
             continue
+        result = results[idx]
         name = class_names.get(ann.class_id, f"class_{ann.class_id}")
         label = f"{name}  Q{result.quality:.2f}  F{result.polygon_fidelity:.2f}"
         if result.part_count > 1:
