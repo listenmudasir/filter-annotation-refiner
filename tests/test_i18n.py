@@ -110,7 +110,7 @@ def test_language_selector_lists_both_languages(qapp, monkeypatch, tmp_path):
     codes = [win.language_combo.itemData(i) for i in range(win.language_combo.count())]
     assert codes == list(LANGUAGES)
     # The name of each language is shown in that language, not translated.
-    assert win.language_combo.itemText(codes.index("zh")) == "中文"
+    assert win.language_combo.itemText(codes.index("zh")) == "繁體中文"
 
 
 def test_language_choice_is_persisted(monkeypatch, tmp_path):

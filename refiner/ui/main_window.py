@@ -11,7 +11,7 @@ from PySide6.QtCore import QThread, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox,
     QProgressBar, QPushButton, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -518,8 +518,13 @@ class MainWindow(QMainWindow):
         self.view_comparison_btn.setText(tr("review.view.comparison"))
         self.view_comparison_btn.setToolTip(tr("review.view.comparison.tip"))
         self.refresh_review_btn.setText(tr("review.refresh"))
-        self.open_overlays_btn.setText(tr("review.open.overlays"))
-        self.open_output_btn.setText(tr("review.open.output"))
+        self.open_dataset_btn.setText(tr("review.open.dataset"))
+        self.diagnostics_btn.setText(tr("review.diagnostics"))
+        for action in self.diagnostics_menu.actions():
+            data = action.data()
+            if data:
+                action.setText(tr(data[0]))
+        self._diag_root_action.setText(tr("diag.root"))
         self.review_table.setHorizontalHeaderLabels([
             tr("review.col.image"), tr("review.col.class"), tr("review.col.instance"),
             tr("review.col.quality"), tr("review.col.sam"), tr("review.col.reason"),
@@ -536,10 +541,31 @@ class MainWindow(QMainWindow):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(18, 16, 18, 18); layout.setSpacing(12)
         top = QHBoxLayout(); self.review_title = QLabel(); self.review_title.setObjectName("SectionTitle"); top.addWidget(self.review_title)
         top.addStretch(1)
-        self.open_output_btn = QPushButton(); self.open_output_btn.setEnabled(False); self.open_output_btn.clicked.connect(self._open_output)
-        self.open_overlays_btn = QPushButton()
-        self.open_overlays_btn.setEnabled(False)
-        self.open_overlays_btn.clicked.connect(self._open_overlays)
+        # The dataset is the deliverable, so it gets the primary button; everything
+        # else is diagnostic and collapses into one menu rather than a row of buttons
+        # that grows with each new artifact type.
+        self.open_dataset_btn = QPushButton(); self.open_dataset_btn.setObjectName("Primary")
+        self.open_dataset_btn.setEnabled(False)
+        self.open_dataset_btn.clicked.connect(self._open_dataset_folder)
+        self.diagnostics_btn = QPushButton(); self.diagnostics_btn.setEnabled(False)
+        self.diagnostics_menu = QMenu(self)
+        for key, name in (
+            ("diag.overlays", "overlays"),
+            ("diag.comparisons", "comparisons"),
+            ("diag.masks", "masks"),
+            ("diag.previews", "review_previews"),
+            ("diag.reports", "reports"),
+        ):
+            action = self.diagnostics_menu.addAction("")
+            action.setData((key, name))
+            action.triggered.connect(lambda _c=False, n=name: self._open_path(self._artifact_dir(n)))
+        self.diagnostics_menu.addSeparator()
+        self._diag_root_action = self.diagnostics_menu.addAction("")
+        self._diag_root_action.triggered.connect(lambda: self._open_path(self.output_root))
+        self.diagnostics_btn.setMenu(self.diagnostics_menu)
+        # Kept for compatibility with existing call sites/tests.
+        self.open_output_btn = self.open_dataset_btn
+        self.open_overlays_btn = self.diagnostics_btn
         # Which saved artifact the right-hand panel shows.
         self.view_overlay_btn = QPushButton(); self.view_overlay_btn.setCheckable(True); self.view_overlay_btn.setChecked(True)
         self.view_overlay_btn.clicked.connect(lambda: self._set_review_view("overlay"))
@@ -547,7 +573,7 @@ class MainWindow(QMainWindow):
         self.view_comparison_btn.clicked.connect(lambda: self._set_review_view("comparison"))
         top.addWidget(self.view_overlay_btn); top.addWidget(self.view_comparison_btn)
         self.refresh_review_btn = QPushButton(); self.refresh_review_btn.clicked.connect(self._refresh_review); self.refresh_review_btn.setEnabled(False)
-        top.addWidget(self.refresh_review_btn); top.addWidget(self.open_overlays_btn); top.addWidget(self.open_output_btn); layout.addLayout(top)
+        top.addWidget(self.refresh_review_btn); top.addWidget(self.open_dataset_btn); top.addWidget(self.diagnostics_btn); layout.addLayout(top)
         self.review_note = QLabel()
         self.review_note.setWordWrap(True); self.review_note.setObjectName("Muted"); layout.addWidget(self.review_note)
         # Kept separate from summary_label so refreshing the queue cannot overwrite
@@ -926,7 +952,8 @@ class MainWindow(QMainWindow):
     def _refresh_review(self) -> None:
         self.review_table.setRowCount(0)
         if not self.output_root: return
-        path = self.output_root / "reports" / "review_queue.csv"
+        reports = self._artifact_dir("reports")
+        path = (reports / "review_queue.csv") if reports else self.output_root / "nonexistent"
         if not path.exists():
             self.review_status.setText(tr("review.noqueue")); return
         with path.open("r", newline="", encoding="utf-8") as f:
@@ -972,6 +999,35 @@ class MainWindow(QMainWindow):
         else:
             self.review_status.setText(tr("review.count", count=len(rows)))
 
+    # ---------------- Output layout ----------------
+    #: Artifact folders, newest layout first. Runs made before the dataset/ + qa/
+    #: split keep working because the legacy location is still searched.
+    ARTIFACT_LOCATIONS = {
+        "overlays": ("qa/overlays", "overlays"),
+        "comparisons": ("qa/comparisons", "comparisons"),
+        "masks": ("qa/masks", "masks"),
+        "review_previews": ("qa/review_previews", "review_previews"),
+        "reports": ("qa/reports", "reports"),
+        "dataset": ("dataset", "."),
+    }
+
+    def _artifact_dir(self, name: str) -> Path | None:
+        """Where ``name`` lives in this output folder, whichever layout it uses."""
+        if not self.output_root:
+            return None
+        for relative in self.ARTIFACT_LOCATIONS.get(name, (name,)):
+            candidate = (self.output_root / relative).resolve()
+            if candidate.is_dir():
+                return candidate
+        return None
+
+    def _open_path(self, path: Path | None) -> None:
+        if path is not None and path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_dataset_folder(self) -> None:
+        self._open_path(self._artifact_dir("dataset") or self.output_root)
+
     def _saved_overlay_for(self, image_rel: str) -> Path | None:
         """Artifact to display for this object, honouring the chosen view mode.
 
@@ -982,11 +1038,14 @@ class MainWindow(QMainWindow):
             return None
         relative = Path(image_rel).with_suffix(".jpg")
         if self._review_view == "comparison":
-            folders = ("comparisons", "overlays", "review_previews")
+            names = ("comparisons", "overlays", "review_previews")
         else:
-            folders = ("overlays", "review_previews", "comparisons")
-        for folder in folders:
-            candidate = self.output_root / folder / relative
+            names = ("overlays", "review_previews", "comparisons")
+        for name in names:
+            folder = self._artifact_dir(name)
+            if folder is None:
+                continue
+            candidate = folder / relative
             if candidate.exists():
                 return candidate
         return None

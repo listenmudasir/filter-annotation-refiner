@@ -209,7 +209,7 @@ def test_start_button_converts_and_fills_the_review_tab(qapp, window, tmp_path):
     window.output_edit.setText(str(out))
     run_conversion(qapp, window)
 
-    labels = sorted((out / "labels" / "train").glob("*.txt"))
+    labels = sorted((out / "dataset" / "labels" / "train").glob("*.txt"))
     assert len(labels) == 3
     assert all(path.read_text().strip() for path in labels)
 
@@ -236,7 +236,7 @@ def test_overlay_is_saved_for_every_image(qapp, window, tmp_path):
     window.output_edit.setText(str(out))
     run_conversion(qapp, window)
 
-    overlays = sorted((out / "overlays" / "images" / "train").glob("*.jpg"))
+    overlays = sorted((out / "qa" / "overlays" / "images" / "train").glob("*.jpg"))
     assert len(overlays) == 3, "an overlay must be written for every converted image"
     for path in overlays:
         with Image.open(path) as img:
@@ -249,8 +249,8 @@ def test_overlays_can_be_switched_off(qapp, window, tmp_path):
     window.output_edit.setText(str(out))
     window.chk_overlays.setChecked(False)
     run_conversion(qapp, window)
-    assert not (out / "overlays").exists()
-    assert sorted((out / "labels" / "train").glob("*.txt"))
+    assert not (out / "qa" / "overlays").exists()
+    assert sorted((out / "dataset" / "labels" / "train").glob("*.txt"))
 
 
 def test_review_table_matches_the_queue_file(qapp, window, tmp_path):
@@ -260,7 +260,7 @@ def test_review_table_matches_the_queue_file(qapp, window, tmp_path):
     window.accept_spin.setValue(0.99)
     run_conversion(qapp, window)
 
-    queue = (out / "reports" / "review_queue.csv").read_text().strip().splitlines()
+    queue = (out / "qa" / "reports" / "review_queue.csv").read_text().strip().splitlines()
     assert window.review_table.rowCount() == len(queue) - 1 > 0
     assert "uncertain object" in window.review_status.text()
     # Refreshing the queue must not clobber the run summary.
@@ -336,10 +336,37 @@ def test_open_folder_buttons_point_at_real_paths(qapp, window, tmp_path, monkeyp
         "refiner.ui.main_window.QDesktopServices.openUrl",
         lambda url: opened.append(url.toLocalFile()),
     )
-    window.open_output_btn.click()
-    window.open_overlays_btn.click()
-    assert opened == [str(out), str(out / "overlays")]
+    window.open_dataset_btn.click()
+    # Diagnostics is a menu; trigger the overlays entry directly.
+    overlays_action = next(
+        a for a in window.diagnostics_menu.actions()
+        if a.data() and a.data()[1] == "overlays"
+    )
+    overlays_action.trigger()
+    assert opened == [str(out / "dataset"), str(out / "qa" / "overlays")]
     assert all(Path(p).exists() for p in opened)
+
+
+def test_legacy_flat_output_is_still_readable(qapp, window, tmp_path):
+    """Runs made before the dataset/ + qa/ split must keep working."""
+    out = tmp_path / "legacy"
+    (out / "overlays" / "images" / "train").mkdir(parents=True)
+    (out / "reports").mkdir(parents=True)
+    Image.new("RGB", (40, 30), "white").save(out / "overlays" / "images" / "train" / "img0.jpg")
+    (out / "reports" / "review_queue.csv").write_text("image,instance\n")
+    window.output_root = out
+
+    assert window._artifact_dir("overlays") == (out / "overlays").resolve()
+    assert window._artifact_dir("reports") == (out / "reports").resolve()
+    assert window._saved_overlay_for("images/train/img0.jpg") is not None
+
+
+def test_new_layout_is_preferred_over_legacy(qapp, window, tmp_path):
+    out = tmp_path / "both"
+    (out / "overlays").mkdir(parents=True)
+    (out / "qa" / "overlays").mkdir(parents=True)
+    window.output_root = out
+    assert window._artifact_dir("overlays") == (out / "qa" / "overlays").resolve()
 
 
 def seed_other_backend_output(ds_path: Path, out: Path) -> None:

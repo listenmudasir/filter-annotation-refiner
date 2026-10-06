@@ -152,11 +152,17 @@ class SmartRefinementEngine:
         self._io_errors: list[str] = []
         self.state = ProjectState(self.output_root)
         self._guard_run_provenance()
-        self.report_dir = self.output_root / "reports"
-        self.mask_dir = self.output_root / "masks"
-        self.preview_dir = self.output_root / "review_previews"
-        self.overlay_dir = self.output_root / "overlays"
-        self.comparison_dir = self.output_root / "comparisons"
+        # The deliverable and the QA material are separated. Previously nine
+        # sibling entries sat at the top level and the 7 MB of labels that the whole
+        # conversion exists to produce were indistinguishable from 900 MB of
+        # review imagery. Now: dataset/ is what you train on, qa/ can be deleted.
+        self.dataset_dir = self.output_root / "dataset"
+        self.qa_dir = self.output_root / "qa"
+        self.report_dir = self.qa_dir / "reports"
+        self.mask_dir = self.qa_dir / "masks"
+        self.preview_dir = self.qa_dir / "review_previews"
+        self.overlay_dir = self.qa_dir / "overlays"
+        self.comparison_dir = self.qa_dir / "comparisons"
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self._report_path = self.report_dir / "objects.csv"
         self._review_path = self.report_dir / "review_queue.csv"
@@ -212,6 +218,8 @@ class SmartRefinementEngine:
 
     def _prepare_dataset_metadata(self) -> None:
         self.output_root.mkdir(parents=True, exist_ok=True)
+        self.dataset_dir.mkdir(parents=True, exist_ok=True)
+        self._write_readme()
         # Preserve/normalize a source YAML when available.
         yaml_candidates = [self.dataset.root / "data.yaml", self.dataset.root / "dataset.yaml"]
         yaml_candidates += list(self.dataset.root.glob("*.yaml"))
@@ -245,7 +253,7 @@ class SmartRefinementEngine:
                 data["names"] = self._output_class_names(data.get("names"))
                 data["nc"] = len(data["names"])
                 data.setdefault("train", self._default_split())
-                (self.output_root / "data.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+                (self.dataset_dir / "data.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
                 return
             except Exception:
                 pass
@@ -260,7 +268,7 @@ class SmartRefinementEngine:
             "nc": len(names),
             "names": names,
         }
-        (self.output_root / "data.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        (self.dataset_dir / "data.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     def _output_class_names(self, existing) -> dict[int, str]:
         """Names covering every class id present, filling gaps with placeholders.
@@ -289,16 +297,41 @@ class SmartRefinementEngine:
             break
         return "images"
 
+    README_TEXT = """Filter Annotation Refiner output
+================================
+
+dataset/   The segmentation dataset. This is what you train on.
+           dataset/data.yaml is ready for Ultralytics:
+               yolo segment train data=dataset/data.yaml model=yolo11n-seg.pt
+
+qa/        Quality-assurance material only. Safe to delete once you are happy
+           with the conversion; nothing here is needed for training.
+           overlays/         every image with its mask drawn
+           comparisons/      input detection boxes beside the masks produced
+           masks/            per-instance PNG masks
+           review_previews/  uncertain images only
+           reports/          objects.csv, review_queue.csv, failures.csv,
+                             summary.json
+
+Source labels were never modified.
+"""
+
+    def _write_readme(self) -> None:
+        """Explain the two folders in the folder itself, for whoever opens it later."""
+        path = self.output_root / "README.txt"
+        if not path.exists():
+            path.write_text(self.README_TEXT, encoding="utf-8")
+
     def _output_image_path(self, record: ImageRecord) -> Path:
-        return self.output_root / record.relative_image
+        return self.dataset_dir / record.relative_image
 
     def _output_label_path(self, record: ImageRecord) -> Path:
         parts = list(record.relative_image.parts)
         image_indices = [i for i, p in enumerate(parts) if p == "images"]
         if image_indices:
             parts[image_indices[-1]] = "labels"
-            return self.output_root.joinpath(*parts).with_suffix(".txt")
-        return self.output_root / "labels" / record.relative_image.with_suffix(".txt")
+            return self.dataset_dir.joinpath(*parts).with_suffix(".txt")
+        return self.dataset_dir / "labels" / record.relative_image.with_suffix(".txt")
 
     def _copy_or_link_image(self, record: ImageRecord) -> None:
         dst = self._output_image_path(record)
@@ -712,7 +745,7 @@ class SmartRefinementEngine:
             "backend": self.backend.name,
             "preset": self.settings.preset,
             "output_root": str(self.output_root),
-            "data_yaml": str(self.output_root / "data.yaml"),
+            "data_yaml": str(self.dataset_dir / "data.yaml"),
         }
         # Report the prompts actually present, so a folder containing results from
         # more than one backend cannot masquerade as a clean single-backend run.

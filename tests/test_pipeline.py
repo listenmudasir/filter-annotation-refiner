@@ -33,10 +33,10 @@ def test_fallback_end_to_end(tmp_path: Path):
     assert result.output_label.exists()
     line = result.output_label.read_text().strip().split()
     assert len(line) > 7
-    assert (out / "images" / "train" / "x.jpg").exists()
-    assert (out / "reports" / "objects.csv").exists()
+    assert (out / "dataset" / "images" / "train" / "x.jpg").exists()
+    assert (out / "qa" / "reports" / "objects.csv").exists()
 
-    rows = list(csv.DictReader((out / "reports" / "objects.csv").open(encoding="utf-8")))
+    rows = list(csv.DictReader((out / "qa" / "reports" / "objects.csv").open(encoding="utf-8")))
     assert len(rows) == 1
     assert float(rows[0]["fidelity"]) > 0.95
     assert rows[0]["parts"] == "1"
@@ -149,7 +149,7 @@ def test_data_yaml_is_always_written(tmp_path: Path):
     out = tmp_path / "out"
     SmartRefinementEngine(ds, FallbackBackend(), out, ConversionSettings(preset="fast"))
 
-    data = yaml.safe_load((out / "data.yaml").read_text())
+    data = yaml.safe_load((out / "dataset" / "data.yaml").read_text())
     assert data["task"] == "segment"
     assert data["path"] == "."
     # Ids must be contiguous for Ultralytics, including the unused id 2.
@@ -163,7 +163,7 @@ def test_data_yaml_keeps_source_class_names(tmp_path: Path):
     ds = scan_dataset(src)
     out = tmp_path / "out"
     SmartRefinementEngine(ds, FallbackBackend(), out, ConversionSettings(preset="fast"))
-    data = yaml.safe_load((out / "data.yaml").read_text())
+    data = yaml.safe_load((out / "dataset" / "data.yaml").read_text())
     assert data["names"][0] == "Scratch"
     assert data["task"] == "segment"
 
@@ -176,7 +176,7 @@ def test_comparison_images_are_written(tmp_path: Path):
     engine.process_record(ds.records[0], resume=False)
     assert engine.wait_for_writes() == []
 
-    comparisons = list((out / "comparisons").rglob("*.jpg"))
+    comparisons = list((out / "qa" / "comparisons").rglob("*.jpg"))
     assert len(comparisons) == 1
     with Image.open(comparisons[0]) as img:
         # Two panels side by side, so wider than tall relative to the source.
@@ -193,7 +193,7 @@ def test_comparisons_can_be_disabled(tmp_path: Path):
     )
     engine.process_record(ds.records[0], resume=False)
     assert engine.wait_for_writes() == []
-    assert not (out / "comparisons").exists()
+    assert not (out / "qa" / "comparisons").exists()
 
 
 def test_background_writers_produce_the_same_files(tmp_path: Path):
@@ -247,7 +247,7 @@ def test_report_schema_mismatch_is_refused(tmp_path: Path):
     src = make_dataset(tmp_path)
     ds = scan_dataset(src)
     out = tmp_path / "out"
-    reports = out / "reports"
+    reports = out / "qa" / "reports"
     reports.mkdir(parents=True)
     (reports / "objects.csv").write_text("image,instance,quality\n")
 
