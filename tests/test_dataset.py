@@ -168,3 +168,58 @@ def test_real_source_dataset_is_not_flagged(tmp_path: Path):
     (src / "labels").mkdir()
     (src / "labels" / "a.txt").write_text("0 0.5 0.5 0.4 0.4\n")
     assert generated_output_marker(src) is None
+
+
+def test_scan_reports_progress_and_can_be_cancelled(tmp_path: Path):
+    """Regression: scanning a large dataset froze the GUI with no way out.
+
+    scan_dataset opens every image header and reads every label file, so it is
+    linear in dataset size - 23 s for 8k images. Run on the GUI thread without
+    progress or cancellation it looked like a crash and got force-quit.
+    """
+    from refiner.dataset import ScanCancelled, scan_dataset
+
+    flat = tmp_path / "many"
+    for i in range(200):
+        image(flat / f"img{i:03d}.jpg", size=(32, 24))
+        (flat / f"img{i:03d}.txt").write_text("0 0.5 0.5 0.4 0.4\n")
+
+    seen: list[tuple[int, int]] = []
+    ds = scan_dataset(flat, progress=lambda done, total: seen.append((done, total)))
+    assert len(ds.records) == 200
+    assert seen[0] == (0, 200) and seen[-1] == (200, 200)
+    assert len(seen) >= 3, "progress must be reported during the scan, not only at the end"
+
+    import pytest
+    with pytest.raises(ScanCancelled):
+        scan_dataset(flat, should_stop=lambda: True)
+
+
+def test_cancelled_scan_stops_early(tmp_path: Path):
+    from refiner.dataset import ScanCancelled, scan_dataset
+
+    flat = tmp_path / "many"
+    for i in range(300):
+        image(flat / f"img{i:03d}.jpg", size=(32, 24))
+
+    calls = {"n": 0}
+
+    def stop_after_a_while() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 2          # cancel on the third check
+
+    import pytest
+    with pytest.raises(ScanCancelled):
+        scan_dataset(flat, should_stop=stop_after_a_while)
+    assert calls["n"] <= 4, "cancellation must be noticed promptly, not at the end"
+
+
+def test_class_names_found_without_a_stat_per_file(tmp_path: Path):
+    """A directory whose name matches a yaml pattern must not break the walk."""
+    flat = tmp_path / "ds"
+    image(flat / "a.jpg")
+    (flat / "a.txt").write_text("0 0.5 0.5 0.4 0.4\n")
+    (flat / "notes.yaml").mkdir(parents=True)   # a *directory* named like a YAML
+    (flat / "classes.txt").write_text("Crack\nPit\n")
+
+    assert load_class_names(flat) == {0: "Crack", 1: "Pit"}

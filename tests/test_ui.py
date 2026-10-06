@@ -48,6 +48,7 @@ def dataset(tmp_path: Path) -> Path:
 def window(qapp, dataset) -> MainWindow:
     win = MainWindow("fallback", None, None)
     win._load_dataset(str(dataset))
+    assert win.wait_for_scan(), "dataset scan did not finish"
     return win
 
 
@@ -127,6 +128,7 @@ def test_next_button_switches_tab(window):
 def test_rescan_button_reloads(window, dataset):
     window.m_images.set_value("stale")
     window.scan_btn.click()
+    assert window.wait_for_scan()
     assert window.m_images.value.text() == "3"
 
 
@@ -510,6 +512,7 @@ def test_loading_new_data_cancels_a_running_conversion(qapp, window, dataset, tm
     assert window.is_running()
 
     window._load_dataset(str(dataset))
+    assert window.wait_for_scan()
     pump(qapp, 0.1)
     assert not window.is_running(), "the previous run must be stopped before rescanning"
     assert window.start_btn.isEnabled()
@@ -713,6 +716,7 @@ def test_input_preview_handles_a_dataset_with_no_annotations(qapp, tmp_path):
     Image.new("RGB", (80, 60), "white").save(src / "images" / "bg.jpg")
     win = MainWindow("fallback")
     win._load_dataset(str(src))
+    assert win.wait_for_scan()
     assert not win.input_preview.view.has_image()
     assert window_nav_disabled(win)
 
@@ -808,3 +812,44 @@ def test_final_image_always_repaints(qapp, window, tmp_path):
     window._last_preview_at = time.monotonic()   # throttle is active
     window._on_progress(200, 200, outcome)       # but this is the last image
     assert len(rendered) == 1
+
+
+def test_scan_runs_off_the_gui_thread(qapp, dataset):
+    """The window must stay responsive while a dataset is indexed."""
+    win = MainWindow("fallback")
+    win._load_dataset(str(dataset))
+    # A worker thread exists and the dataset is not yet populated synchronously.
+    assert win.scan_thread is not None
+    assert win.scan_cancel_btn.isVisible() or win.scan_in_progress() or win.dataset is not None
+    assert win.wait_for_scan()
+    assert win.dataset is not None
+    assert not win.scan_cancel_btn.isVisible()
+    assert win.m_images.value.text() == "3"
+
+
+def test_scan_can_be_cancelled_from_the_ui(qapp, tmp_path):
+    from PIL import Image as PILImage
+
+    flat = tmp_path / "many"
+    flat.mkdir()
+    for i in range(400):
+        PILImage.new("RGB", (32, 24), "white").save(flat / f"img{i:03d}.jpg")
+        (flat / f"img{i:03d}.txt").write_text("0 0.5 0.5 0.4 0.4\n")
+
+    win = MainWindow("fallback")
+    win._load_dataset(str(flat))
+    win.scan_cancel_btn.click()
+    assert win.wait_for_scan(20)
+    assert win.dataset is None, "a cancelled scan must not populate a dataset"
+    assert not win.scan_cancel_btn.isVisible()
+    assert win.start_btn.isEnabled() is False
+
+
+def test_scan_error_is_reported_not_raised(qapp, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: shown.append(a[1]))
+    win = MainWindow("fallback")
+    win._load_dataset(str(tmp_path / "does_not_exist"))
+    assert win.wait_for_scan(20)
+    assert shown, "a failed scan must surface a dialog"
+    assert win.dataset is None

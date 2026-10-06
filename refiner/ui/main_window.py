@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ..dataset import class_histogram, generated_output_marker, scan_dataset
+from ..dataset import class_histogram, generated_output_marker
 from ..models import DatasetIndex
 from ..services.refinement import (
     ConversionSettings, RecordOutcome, describe_output_conflict, suggest_free_output,
@@ -45,7 +45,7 @@ REVIEW_FILTER_MATCHES = {
     "quality": ("low overall quality",),
 }
 from .widgets import DatasetDropZone, ImagePreview, MetricCard
-from .workers import ConversionWorker
+from .workers import ConversionWorker, ScanWorker
 
 
 class MainWindow(QMainWindow):
@@ -65,6 +65,8 @@ class MainWindow(QMainWindow):
         self._last_preview_at = 0.0
         self._input_index = 0
         self._review_view = "overlay"
+        self.scan_worker: ScanWorker | None = None
+        self.scan_thread: QThread | None = None
         self.resize(1500, 930)
         self.setMinimumSize(1180, 760)
         self.setStyleSheet(APP_QSS)
@@ -173,6 +175,11 @@ class MainWindow(QMainWindow):
         self.scan_btn.clicked.connect(self._rescan)
         self.scan_btn.setEnabled(False)
         path_row.addWidget(self.scan_btn)
+        self.scan_cancel_btn = QPushButton()
+        self.scan_cancel_btn.setObjectName("Danger")
+        self.scan_cancel_btn.setVisible(False)
+        self.scan_cancel_btn.clicked.connect(self._cancel_scan)
+        path_row.addWidget(self.scan_cancel_btn)
         layout.addLayout(path_row)
 
         metrics = QHBoxLayout()
@@ -302,6 +309,7 @@ class MainWindow(QMainWindow):
         self.dataset_path_caption.setText(tr("dataset.label"))
         self.scan_btn.setText(tr("dataset.rescan"))
         self.choose_btn.setText(tr("dataset.change"))
+        self.scan_cancel_btn.setText(tr("dataset.scan.cancel"))
         self.next_btn.setText(tr("dataset.next"))
         self.drop_zone.retranslate()
         for card, key in (
@@ -627,16 +635,88 @@ class MainWindow(QMainWindow):
             if not self._cancel_running_conversion():
                 QMessageBox.warning(self, tr("convert.stillstopping.title"), tr("convert.stillstopping.body"))
                 return
+        self._cancel_scan()
+
+        self._pending_scan_path = path
+        self.dataset_path.setText(path)
+        self._set_dataset_controls_enabled(False)
+        self.scan_cancel_btn.setVisible(True)
+        self.dataset_status.setText(tr("dataset.scanning"))
+
+        self.scan_thread = QThread(self)
+        self.scan_worker = ScanWorker(path)
+        self.scan_worker.moveToThread(self.scan_thread)
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.progress.connect(self._on_scan_progress)
+        self.scan_worker.finished.connect(self._on_scan_finished)
+        self.scan_worker.error.connect(self._on_scan_error)
+        self.scan_worker.cancelled.connect(self._on_scan_cancelled)
+        for signal in (self.scan_worker.finished, self.scan_worker.error, self.scan_worker.cancelled):
+            signal.connect(self.scan_thread.quit, Qt.DirectConnection)
+        self.scan_thread.finished.connect(self._on_scan_thread_finished)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
+        self.scan_thread.start()
+
+    def scan_in_progress(self) -> bool:
+        if self.scan_thread is None:
+            return False
         try:
-            self.dataset_status.setText(tr("dataset.scanning"))
-            self.dataset = scan_dataset(path)
-        except Exception as exc:
-            QMessageBox.critical(self, tr("dataset.scanfailed"), str(exc)); return
+            return self.scan_thread.isRunning()
+        except RuntimeError:
+            self.scan_thread = None
+            return False
+
+    def wait_for_scan(self, timeout: float = 120.0) -> bool:
+        """Block until the current scan finishes, keeping the event loop alive."""
+        deadline = time.monotonic() + timeout
+        while self.scan_in_progress() and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.005)
+        QApplication.processEvents()
+        return not self.scan_in_progress()
+
+    def _cancel_scan(self) -> None:
+        if self.scan_worker is not None:
+            self.scan_worker.stop()
+        thread = self.scan_thread
+        if thread is not None:
+            deadline = time.monotonic() + 10
+            while self.scan_in_progress() and time.monotonic() < deadline:
+                QApplication.processEvents()
+                thread.wait(20)
+
+    def _set_dataset_controls_enabled(self, enabled: bool) -> None:
+        self.drop_zone.setEnabled(enabled)
+        self.choose_btn.setEnabled(enabled)
+        self.scan_btn.setEnabled(enabled and self.dataset is not None)
+
+    def _on_scan_progress(self, done: int, total: int) -> None:
+        self.dataset_status.setText(tr("dataset.scanning.progress", current=done, total=total))
+
+    def _on_scan_thread_finished(self) -> None:
+        self.scan_thread = None
+        self.scan_worker = None
+
+    def _on_scan_cancelled(self) -> None:
+        self.scan_cancel_btn.setVisible(False)
+        self._set_dataset_controls_enabled(True)
+        self.dataset_status.setText(tr("dataset.scan.cancelled"))
+
+    def _on_scan_error(self, message: str) -> None:
+        self.scan_cancel_btn.setVisible(False)
+        self._set_dataset_controls_enabled(True)
+        self.dataset_status.setText(tr("dataset.choose"))
+        QMessageBox.critical(self, tr("dataset.scanfailed"), message)
+
+    def _on_scan_finished(self, dataset) -> None:
+        self.dataset = dataset
+        self.scan_cancel_btn.setVisible(False)
         self._input_index = 0
         # The drop zone has done its job; the space is worth more to the preview.
         self.drop_zone.setVisible(False)
         self.choose_btn.setVisible(True)
         self.dataset_path.setText(str(self.dataset.root)); self.scan_btn.setEnabled(True)
+        self._set_dataset_controls_enabled(True)
         self.convert_dataset_label.setText(self.dataset.root.name)
         self.output_root = self.dataset.root.parent / f"{self.dataset.root.name}_sam_refined"
         self.output_edit.setText(str(self.output_root))

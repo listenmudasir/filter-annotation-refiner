@@ -10,6 +10,7 @@ from ..backend.base import SegmentationBackend
 from ..backend.fallback import FallbackBackend
 from ..backend.sam2_backend import Sam2Backend
 from ..backend.sam3_backend import Sam3Backend
+from ..dataset import ScanCancelled, scan_dataset
 from ..models import DatasetIndex, ReviewState
 from ..services.refinement import ConversionCancelled, ConversionSettings, SmartRefinementEngine
 
@@ -128,3 +129,41 @@ class ConversionWorker(QObject):
             self.finished.emit(stats)
         except Exception as exc:
             self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
+
+
+class ScanWorker(QObject):
+    """Index a dataset off the GUI thread.
+
+    Scanning opens every image header and reads every label file, so it is linear
+    in dataset size - about 9 s for 8k images and minutes for a large one. Run on
+    the GUI thread it froze the window with no feedback and no way out, which read
+    as a crash and got the app force-quit.
+    """
+
+    progress = Signal(int, int)
+    finished = Signal(object)
+    error = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, path: str):
+        super().__init__()
+        self.path = path
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            dataset = scan_dataset(
+                self.path,
+                progress=lambda done, total: self.progress.emit(done, total),
+                should_stop=self._stop.is_set,
+            )
+        except ScanCancelled:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.error.emit(f"{type(exc).__name__}: {exc}")
+        else:
+            self.finished.emit(dataset)
