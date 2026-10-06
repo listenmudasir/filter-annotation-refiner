@@ -766,3 +766,45 @@ def test_comparison_view_falls_back_when_comparisons_were_not_saved(qapp, window
     # showing an error.
     assert window._saved_overlay_for(rel).parent.parent.parent.name == "overlays"
     assert window.review_preview.view.has_image()
+
+
+def test_preview_is_rate_limited_during_fast_progress(qapp, window, dataset, tmp_path):
+    """Regression: resume skipping at ~20 images/s froze the GUI.
+
+    Each progress signal decoded a full-resolution image and built its pixmap on
+    the GUI thread, so the worker outran the event loop and Qt reported the window
+    as not responding.
+    """
+    from refiner.services.refinement import RecordOutcome
+
+    window.output_root = tmp_path / "out"
+    record = window.dataset.records[0]
+    outcome = RecordOutcome(record, [], tmp_path / "x.txt", skipped=True)
+
+    rendered = []
+    window._show_skipped_preview = lambda rec: rendered.append(rec)
+
+    window._last_preview_at = 0.0
+    for i in range(1, 51):            # 50 rapid updates, as fast as the loop runs
+        window._on_progress(i, 200, outcome)
+
+    assert len(rendered) <= 2, f"preview repainted {len(rendered)} times in a burst"
+    # Counters must still track every single update.
+    assert window.progress.value() == 50
+    assert window.progress_text.text() == "50 / 200 images"
+
+
+def test_final_image_always_repaints(qapp, window, tmp_path):
+    """Throttling must not drop the last frame, or the preview ends mid-run."""
+    from refiner.services.refinement import RecordOutcome
+
+    window.output_root = tmp_path / "out"
+    record = window.dataset.records[0]
+    outcome = RecordOutcome(record, [], tmp_path / "x.txt", skipped=True)
+
+    rendered = []
+    window._show_skipped_preview = lambda rec: rendered.append(rec)
+
+    window._last_preview_at = time.monotonic()   # throttle is active
+    window._on_progress(200, 200, outcome)       # but this is the last image
+    assert len(rendered) == 1

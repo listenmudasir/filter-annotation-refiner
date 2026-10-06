@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self._run_started_index: int = 0
         self._review_rows: list[dict[str, str]] = []
         self._last_stats: dict | None = None
+        self._last_preview_at = 0.0
         self._input_index = 0
         self._review_view = "overlay"
         self.resize(1500, 930)
@@ -751,6 +752,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(False); self.pause_btn.setEnabled(True); self.stop_btn.setEnabled(True)
         self.progress.setValue(0); self.current_status.setText(tr("convert.starting"))
         self._run_started_at = None; self._run_started_index = 0
+        self._last_preview_at = 0.0
         self.throughput_text.setText(tr("convert.estimating"))
         self.worker_thread = QThread(self)
         self.worker = ConversionWorker(self.dataset, output, self.backend_name, self._settings(), self.device, self.checkpoint, resume=self.chk_resume.isChecked())
@@ -899,9 +901,22 @@ class MainWindow(QMainWindow):
             eta=self._format_duration(remaining),
         ))
 
+    #: Shortest gap between preview repaints. Decoding a full-resolution image and
+    #: building its pixmap costs tens of milliseconds on the GUI thread; when resume
+    #: skips at 20 images/second the event queue backs up and Qt reports the window
+    #: as not responding. Counters stay live; only the picture is rate-limited.
+    PREVIEW_MIN_INTERVAL = 0.2
+
     def _on_progress(self, current: int, total: int, payload) -> None:
         self.progress.setMaximum(max(1, total)); self.progress.setValue(current); self.progress_text.setText(tr("convert.images", current=current, total=total))
         self._update_throughput(current, total)
+
+        now = time.monotonic()
+        is_last = current >= total
+        if not is_last and now - self._last_preview_at < self.PREVIEW_MIN_INTERVAL:
+            return
+        self._last_preview_at = now
+
         names = self.dataset.class_names if self.dataset else None
         if isinstance(payload, RecordOutcome) and payload.skipped:
             # Resume skips work already on disk, so there are no results to draw.
