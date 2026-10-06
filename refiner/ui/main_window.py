@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import random
 import shutil
 import time
 from pathlib import Path
@@ -61,6 +62,8 @@ class MainWindow(QMainWindow):
         self._run_started_index: int = 0
         self._review_rows: list[dict[str, str]] = []
         self._last_stats: dict | None = None
+        self._input_index = 0
+        self._review_view = "overlay"
         self.resize(1500, 930)
         self.setMinimumSize(1180, 760)
         self.setStyleSheet(APP_QSS)
@@ -161,6 +164,10 @@ class MainWindow(QMainWindow):
         self.dataset_path = QLineEdit()
         self.dataset_path.setReadOnly(True)
         path_row.addWidget(self.dataset_path, 1)
+        self.choose_btn = QPushButton()
+        self.choose_btn.clicked.connect(self._choose_dataset)
+        self.choose_btn.setVisible(False)
+        path_row.addWidget(self.choose_btn)
         self.scan_btn = QPushButton()
         self.scan_btn.clicked.connect(self._rescan)
         self.scan_btn.setEnabled(False)
@@ -196,7 +203,34 @@ class MainWindow(QMainWindow):
         self.issue_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         il.addWidget(self.issue_table)
         split.addWidget(issues_card)
-        split.setSizes([520, 760])
+
+        # Looking at one parsed annotation catches a misread label format in seconds.
+        # Without this the first visual confirmation arrives after a full conversion.
+        input_card = QFrame(); input_card.setObjectName("Card")
+        pv = QVBoxLayout(input_card); pv.setContentsMargins(12, 12, 12, 12); pv.setSpacing(8)
+        self.input_title = QLabel(); self.input_title.setObjectName("SectionTitle")
+        pv.addWidget(self.input_title)
+        self.input_preview = ImagePreview()
+        pv.addWidget(self.input_preview, 1)
+
+        nav = QHBoxLayout(); nav.setSpacing(6)
+        self.input_prev_btn = QPushButton("‹"); self.input_prev_btn.setFixedWidth(38)
+        self.input_prev_btn.clicked.connect(lambda: self._step_input_preview(-1))
+        self.input_next_btn = QPushButton("›"); self.input_next_btn.setFixedWidth(38)
+        self.input_next_btn.clicked.connect(lambda: self._step_input_preview(1))
+        self.input_random_btn = QPushButton()
+        self.input_random_btn.clicked.connect(self._random_input_preview)
+        self.input_position = QLabel("—"); self.input_position.setObjectName("Muted")
+        nav.addWidget(self.input_prev_btn); nav.addWidget(self.input_next_btn)
+        nav.addWidget(self.input_random_btn); nav.addWidget(self.input_position)
+        nav.addStretch(1)
+        pv.addLayout(nav)
+        self.input_caption = QLabel(); self.input_caption.setObjectName("Muted")
+        self.input_caption.setWordWrap(True)
+        pv.addWidget(self.input_caption)
+        split.addWidget(input_card)
+
+        split.setSizes([360, 420, 720])
         layout.addWidget(split, 1)
 
         bottom = QHBoxLayout()
@@ -211,11 +245,62 @@ class MainWindow(QMainWindow):
         layout.addLayout(bottom)
         return page
 
+    # ---------------- Input annotation preview ----------------
+    def _annotated_records(self) -> list:
+        """Records worth previewing: the ones that actually carry annotations."""
+        if not self.dataset:
+            return []
+        return [r for r in self.dataset.records if r.annotations]
+
+    def _step_input_preview(self, delta: int) -> None:
+        records = self._annotated_records()
+        if not records:
+            return
+        self._input_index = (self._input_index + delta) % len(records)
+        self._show_input_preview()
+
+    def _random_input_preview(self) -> None:
+        records = self._annotated_records()
+        if len(records) > 1:
+            # Spot-checking a 2000-image dataset means sampling, not paging from 1.
+            choices = [i for i in range(len(records)) if i != self._input_index]
+            self._input_index = random.choice(choices)
+        self._show_input_preview()
+
+    def _show_input_preview(self) -> None:
+        records = self._annotated_records()
+        enabled = len(records) > 1
+        for button in (self.input_prev_btn, self.input_next_btn, self.input_random_btn):
+            button.setEnabled(enabled)
+
+        if not records:
+            self.input_preview.set_message(tr("input.empty"))
+            self.input_position.setText("—")
+            self.input_caption.setText("")
+            return
+
+        self._input_index = max(0, min(self._input_index, len(records) - 1))
+        record = records[self._input_index]
+        # No results passed, so only the source boxes are drawn - this is the input.
+        self.input_preview.show_record(record, None, self.dataset.class_names)
+        self.input_position.setText(
+            tr("input.position", current=self._input_index + 1, total=len(records))
+        )
+        counts: dict[str, int] = {}
+        for ann in record.annotations:
+            name = self.dataset.class_names.get(ann.class_id, f"class_{ann.class_id}")
+            counts[name] = counts.get(name, 0) + 1
+        breakdown = ", ".join(f"{name} ×{n}" for name, n in sorted(counts.items()))
+        self.input_caption.setText(
+            f"{record.relative_image.as_posix()}  ·  {record.width}×{record.height}  ·  {breakdown}"
+        )
+
     def _retranslate_dataset_page(self) -> None:
         self.dataset_intro.setText(tr("dataset.intro"))
         self.dataset_hint.setText(tr("dataset.hint"))
         self.dataset_path_caption.setText(tr("dataset.label"))
         self.scan_btn.setText(tr("dataset.rescan"))
+        self.choose_btn.setText(tr("dataset.change"))
         self.next_btn.setText(tr("dataset.next"))
         self.drop_zone.retranslate()
         for card, key in (
@@ -227,6 +312,11 @@ class MainWindow(QMainWindow):
             (self.m_problems, "dataset.metric.problems"),
         ):
             card.set_label(tr(key))
+        self.input_title.setText(tr("input.title"))
+        self.input_random_btn.setText(tr("input.random"))
+        self.input_prev_btn.setToolTip(tr("input.prev"))
+        self.input_next_btn.setToolTip(tr("input.next"))
+        self._show_input_preview()
         self.classes_title.setText(tr("dataset.classes"))
         self.class_table.setHorizontalHeaderLabels(
             [tr("dataset.classes.id"), tr("dataset.classes.name"), tr("dataset.classes.count")]
@@ -419,6 +509,9 @@ class MainWindow(QMainWindow):
         self._render_summary()
         self.review_title.setText(tr("review.title"))
         self.review_note.setText(tr("review.note"))
+        self.view_overlay_btn.setText(tr("review.view.overlay"))
+        self.view_comparison_btn.setText(tr("review.view.comparison"))
+        self.view_comparison_btn.setToolTip(tr("review.view.comparison.tip"))
         self.refresh_review_btn.setText(tr("review.refresh"))
         self.open_overlays_btn.setText(tr("review.open.overlays"))
         self.open_output_btn.setText(tr("review.open.output"))
@@ -442,6 +535,12 @@ class MainWindow(QMainWindow):
         self.open_overlays_btn = QPushButton()
         self.open_overlays_btn.setEnabled(False)
         self.open_overlays_btn.clicked.connect(self._open_overlays)
+        # Which saved artifact the right-hand panel shows.
+        self.view_overlay_btn = QPushButton(); self.view_overlay_btn.setCheckable(True); self.view_overlay_btn.setChecked(True)
+        self.view_overlay_btn.clicked.connect(lambda: self._set_review_view("overlay"))
+        self.view_comparison_btn = QPushButton(); self.view_comparison_btn.setCheckable(True)
+        self.view_comparison_btn.clicked.connect(lambda: self._set_review_view("comparison"))
+        top.addWidget(self.view_overlay_btn); top.addWidget(self.view_comparison_btn)
         self.refresh_review_btn = QPushButton(); self.refresh_review_btn.clicked.connect(self._refresh_review); self.refresh_review_btn.setEnabled(False)
         top.addWidget(self.refresh_review_btn); top.addWidget(self.open_overlays_btn); top.addWidget(self.open_output_btn); layout.addLayout(top)
         self.review_note = QLabel()
@@ -501,6 +600,10 @@ class MainWindow(QMainWindow):
             self.dataset = scan_dataset(path)
         except Exception as exc:
             QMessageBox.critical(self, tr("dataset.scanfailed"), str(exc)); return
+        self._input_index = 0
+        # The drop zone has done its job; the space is worth more to the preview.
+        self.drop_zone.setVisible(False)
+        self.choose_btn.setVisible(True)
         self.dataset_path.setText(str(self.dataset.root)); self.scan_btn.setEnabled(True)
         self.convert_dataset_label.setText(self.dataset.root.name)
         self.output_root = self.dataset.root.parent / f"{self.dataset.root.name}_sam_refined"
@@ -537,6 +640,7 @@ class MainWindow(QMainWindow):
         ready = bool([r for r in ds.convertible_records if r.annotations])
         self.next_btn.setEnabled(ready); self.start_btn.setEnabled(ready)
         self._update_dataset_status()
+        self._show_input_preview()
 
     def _update_dataset_status(self) -> None:
         ds = self.dataset
@@ -830,15 +934,29 @@ class MainWindow(QMainWindow):
             self.review_status.setText(tr("review.count", count=len(rows)))
 
     def _saved_overlay_for(self, image_rel: str) -> Path | None:
-        """Overlay rendered during conversion, preferred over re-deriving one."""
+        """Artifact to display for this object, honouring the chosen view mode.
+
+        Both views are files written during the conversion, so what is reviewed on
+        screen is exactly what is on disk - no second rendering path to drift.
+        """
         if not self.output_root:
             return None
         relative = Path(image_rel).with_suffix(".jpg")
-        for folder in ("overlays", "review_previews"):
+        if self._review_view == "comparison":
+            folders = ("comparisons", "overlays", "review_previews")
+        else:
+            folders = ("overlays", "review_previews", "comparisons")
+        for folder in folders:
             candidate = self.output_root / folder / relative
             if candidate.exists():
                 return candidate
         return None
+
+    def _set_review_view(self, mode: str) -> None:
+        self._review_view = mode
+        self.view_overlay_btn.setChecked(mode == "overlay")
+        self.view_comparison_btn.setChecked(mode == "comparison")
+        self._review_selection_changed()
 
     def _review_selection_changed(self) -> None:
         rows = self.review_table.selectionModel().selectedRows()

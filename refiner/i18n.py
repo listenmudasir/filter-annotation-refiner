@@ -39,6 +39,7 @@ EN: dict[str, str] = {
     "dataset.drop.button": "Choose Dataset Folder",
     "dataset.label": "Dataset:",
     "dataset.rescan": "Rescan",
+    "dataset.change": "Change dataset…",
     "dataset.metric.images": "Images",
     "dataset.metric.labels": "Matched labels",
     "dataset.metric.objects": "Objects",
@@ -151,6 +152,16 @@ EN: dict[str, str] = {
         "dataset and output folder."
     ),
 
+    "input.title": "Input annotations",
+    "input.empty": "Load a dataset to preview its detection annotations.",
+    "input.position": "{current} / {total}",
+    "input.random": "Random",
+    "input.prev": "Previous annotated image",
+    "input.next": "Next annotated image",
+    "review.view.overlay": "SAM mask",
+    "review.view.comparison": "Box vs mask",
+    "review.view.comparison.tip": "Show the saved side-by-side comparison: input detection box next to the mask it produced.",
+
     # Review filters
     "filter.all": "All",
     "filter.disagree": "Candidates disagree",
@@ -205,6 +216,7 @@ ZH: dict[str, str] = {
     "dataset.drop.button": "选择数据集文件夹",
     "dataset.label": "数据集：",
     "dataset.rescan": "重新扫描",
+    "dataset.change": "更换数据集…",
     "dataset.metric.images": "图像",
     "dataset.metric.labels": "匹配的标注",
     "dataset.metric.objects": "目标",
@@ -307,6 +319,16 @@ ZH: dict[str, str] = {
         "未找到 {image} 的叠加图。\n已在 {root}/overlays 与 /review_previews 中查找。\n"
         "这通常表示审查队列来自与当前载入的数据集和输出目录不同的另一次运行。"
     ),
+
+    "input.title": "输入标注",
+    "input.empty": "载入数据集后可在此预览其检测标注。",
+    "input.position": "第 {current} / {total} 张",
+    "input.random": "随机",
+    "input.prev": "上一张有标注的图像",
+    "input.next": "下一张有标注的图像",
+    "review.view.overlay": "SAM 掩膜",
+    "review.view.comparison": "检测框 vs 掩膜",
+    "review.view.comparison.tip": "显示已保存的并排对比图：输入检测框与其生成的掩膜。",
 
     "filter.all": "全部",
     "filter.disagree": "候选不一致",

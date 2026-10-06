@@ -638,3 +638,104 @@ def test_unreadable_image_reports_instead_of_crashing(qapp, tmp_path):
     record = ImageRecord(broken, None, Path("broken.jpg"), 10, 10, [])
     preview.show_record(record)
     assert "Cannot preview" in preview.placeholder.text()
+
+
+# --------------------------------------------------------------------------- #
+# Input annotation preview (Dataset tab)
+# --------------------------------------------------------------------------- #
+
+
+def test_input_preview_shows_parsed_boxes_before_converting(window):
+    """The operator must be able to verify label parsing without a conversion."""
+    assert window.input_preview.view.has_image()
+    assert window.input_position.text() == "1 / 3"
+    caption = window.input_caption.text()
+    assert "img0.jpg" in caption
+    assert "160x160" not in caption and "160" in caption  # width x height reported
+    assert "Stain" in caption and "Hair" in caption, "class breakdown must be shown"
+
+
+def test_input_preview_navigates(window):
+    first = window.input_caption.text()
+    window.input_next_btn.click()
+    assert window.input_position.text() == "2 / 3"
+    assert window.input_caption.text() != first
+    window.input_prev_btn.click()
+    assert window.input_position.text() == "1 / 3"
+    assert window.input_caption.text() == first
+
+
+def test_input_preview_wraps_at_both_ends(window):
+    window.input_prev_btn.click()
+    assert window.input_position.text() == "3 / 3"
+    window.input_next_btn.click()
+    assert window.input_position.text() == "1 / 3"
+
+
+def test_random_lands_on_a_different_image(window):
+    start = window.input_position.text()
+    window.input_random_btn.click()
+    assert window.input_position.text() != start, "random must move off the current image"
+
+
+def test_input_preview_handles_a_dataset_with_no_annotations(qapp, tmp_path):
+    from refiner.ui.main_window import MainWindow
+
+    src = tmp_path / "empty"
+    (src / "images").mkdir(parents=True)
+    Image.new("RGB", (80, 60), "white").save(src / "images" / "bg.jpg")
+    win = MainWindow("fallback")
+    win._load_dataset(str(src))
+    assert not win.input_preview.view.has_image()
+    assert window_nav_disabled(win)
+
+
+def window_nav_disabled(win) -> bool:
+    return not (
+        win.input_prev_btn.isEnabled()
+        or win.input_next_btn.isEnabled()
+        or win.input_random_btn.isEnabled()
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Review view toggle
+# --------------------------------------------------------------------------- #
+
+
+def test_review_view_toggle_picks_the_matching_artifact(qapp, window, tmp_path):
+    out = tmp_path / "out"
+    window.output_edit.setText(str(out))
+    window.accept_spin.setValue(0.99)
+    run_conversion(qapp, window)
+
+    window.review_table.selectRow(0)
+    pump(qapp)
+    rel = window.review_table.item(0, 0).text()
+    assert window._review_view == "overlay"
+    assert window._saved_overlay_for(rel).parent.parent.parent.name == "overlays"
+
+    window.view_comparison_btn.click()
+    assert window._review_view == "comparison"
+    assert window._saved_overlay_for(rel).parent.parent.parent.name == "comparisons"
+    assert window.review_preview.view.has_image()
+
+    window.view_overlay_btn.click()
+    assert window._saved_overlay_for(rel).parent.parent.parent.name == "overlays"
+
+
+def test_comparison_view_falls_back_when_comparisons_were_not_saved(qapp, window, tmp_path):
+    out = tmp_path / "out"
+    window.output_edit.setText(str(out))
+    window.chk_comparisons.setChecked(False)
+    window.accept_spin.setValue(0.99)
+    run_conversion(qapp, window)
+
+    window.review_table.selectRow(0)
+    pump(qapp)
+    window.view_comparison_btn.click()
+    rel = window.review_table.item(0, 0).text()
+    # No comparisons/ folder exists, so it must degrade to the overlay rather than
+    # showing an error.
+    assert window._saved_overlay_for(rel).parent.parent.parent.name == "overlays"
+    assert window.review_preview.view.has_image()
