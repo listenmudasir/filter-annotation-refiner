@@ -13,6 +13,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
+from .version import APP_NAME, VERSION
+
 #: Language code -> name shown in the selector, in that language.
 LANGUAGES = {"en": "English", "zh": "繁體中文"}
 
@@ -20,7 +22,7 @@ DEFAULT_LANGUAGE = "en"
 
 EN: dict[str, str] = {
     # Header / chrome
-    "app.title": "Filter Annotation Refiner",
+    "app.title": f"{APP_NAME}  v{VERSION}",
     "app.subtitle": "Detection boxes → SAM masks → smart refinement → trainable polygon segmentation",
     "app.language": "Language",
     "tab.dataset": "1  ·  Dataset",
@@ -219,7 +221,7 @@ ZH: dict[str, str] = {
     # Traditional Chinese, Taiwan technical conventions:
     # 資料集 (not 数据集), 影像 (not 图像), 檔案 (not 文件), 品質 (not 质量),
     # 遮罩 (not 掩膜), 偵測 (not 检测), 物件 (not 目标), 設定 (not 设置).
-    "app.title": "標註精修工具",
+    "app.title": f"標註精修工具  v{VERSION}",
     "app.subtitle": "偵測框 → SAM 遮罩 → 智慧精修 → 可訓練的多邊形分割",
     "app.language": "語言",
     "tab.dataset": "1  ·  資料集",

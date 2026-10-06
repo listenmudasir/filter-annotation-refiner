@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 
 from ..geometry import perturb_box
+from ..paths import bundled_weights_dir, is_frozen
 from ..models import Annotation, CandidateMask
 from .base import SegmentationBackend
 
@@ -103,6 +104,17 @@ def _ensure_sam2_importable() -> None:
     except ImportError:
         pass
 
+    if is_frozen():
+        # A compiled build has sam2 linked in at build time. Nuitka cannot follow
+        # a runtime sys.path edit, so if the import above failed here the package
+        # was simply not compiled in - searching the disk would not help and the
+        # vague "not importable" message would hide the real cause.
+        raise RuntimeError(
+            "This build does not contain SAM 2. It was compiled without "
+            "--include-package=sam2 (see PACKAGING.md), so no checkout on this "
+            "machine can supply it."
+        )
+
     searched = _candidate_repos()
     for repo in searched:
         if not _looks_like_checkout(repo):
@@ -137,7 +149,10 @@ def find_checkpoint(explicit: str | None = None) -> Path:
         if path.exists():
             return path
 
-    roots = _candidate_repos()
+    # An installed build ships its checkpoint beside the exe; look there first so
+    # a vendor machine needs no environment variables at all.
+    roots = [bundled_weights_dir()]
+    roots += _candidate_repos()
     roots += [Path("~/.cache/sam2").expanduser(), Path("~/checkpoints").expanduser(), Path.cwd()]
 
     # Prefer the largest/most capable variant when several are present.

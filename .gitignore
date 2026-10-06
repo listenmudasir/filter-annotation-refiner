@@ -28,3 +28,8 @@ ui.json
 build/
 dist/
 *.egg-info/
+
+build/
+dist/
+.venv-build/
+weights/

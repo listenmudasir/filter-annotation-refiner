@@ -191,3 +191,90 @@ def test_every_package_subdir_is_shipped():
         if p.is_dir() and (p / "__init__.py").exists()
     }
     assert found <= declared, f"not shipped: {found - declared}"
+
+
+# --------------------------------------------------------------------------- #
+# Packaging (PACKAGING.md)
+# --------------------------------------------------------------------------- #
+
+
+def test_version_module_is_the_single_source():
+    """refiner/version.py drives the window title, installer name and AppVersion."""
+    import tomllib
+    from pathlib import Path
+
+    from refiner.version import VERSION
+
+    root = Path(__file__).resolve().parents[1]
+    assert (root / "VERSION").read_text(encoding="utf-8").strip() == VERSION
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["version"] == VERSION
+
+
+def test_window_title_carries_the_version():
+    from refiner.i18n import EN, ZH
+    from refiner.version import VERSION
+
+    assert VERSION in EN["app.title"]
+    assert VERSION in ZH["app.title"]
+
+
+def test_self_test_flag_exists():
+    """build.ps1 smoke-tests the compiled exe with --self-test."""
+    from refiner.cli import parse_args
+
+    assert parse_args(["--self-test"]).self_test is True
+    assert parse_args([]).self_test is False
+
+
+def test_frozen_paths_use_argv_not_file(monkeypatch, tmp_path):
+    """In a onefile build __file__ is a temp dir; install paths need sys.argv[0]."""
+    import sys
+
+    from refiner import paths
+
+    fake_exe = tmp_path / "install" / "FilterAnnotationRefiner.exe"
+    fake_exe.parent.mkdir(parents=True)
+    fake_exe.write_text("")
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    monkeypatch.setattr(sys, "argv", [str(fake_exe)])
+
+    assert paths.app_dir() == fake_exe.parent
+    assert paths.bundled_weights_dir() == fake_exe.parent / "weights"
+
+
+def test_frozen_build_without_sam2_names_the_missing_flag(monkeypatch):
+    """Searching a vendor machine for a checkout it will never have hides the cause."""
+    import pytest
+
+    from refiner.backend import sam2_backend as sb
+
+    monkeypatch.setattr(sb, "is_frozen", lambda: True)
+    monkeypatch.setattr(sb.importlib, "import_module", _raise_import_error)
+    with pytest.raises(RuntimeError, match="include-package=sam2"):
+        sb._ensure_sam2_importable()
+
+
+def test_build_script_and_installer_are_present():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    build = (root / "build.ps1").read_text(encoding="utf-8")
+    # The flags PACKAGING.md says are not optional.
+    for flag in ("--include-package=sam2", "--include-package-data=sam2",
+                 "--enable-plugin=pyside6", "--assume-yes-for-downloads"):
+        assert flag in build, flag
+    assert "conda|anaconda|miniconda|miniforge" in build, "must refuse a conda build"
+    assert "rd /s /q" in build, "Remove-Item -Recurse breaks on the torch tree"
+    assert "--self-test" in build, "installer must not be built from an unverified exe"
+    assert (root / "installer.iss").exists()
+    assert (root / "PACKAGING.md").exists()
+
+
+def test_generated_artifacts_are_gitignored():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    ignored = (root / ".gitignore").read_text(encoding="utf-8")
+    for entry in ("build/", "dist/", ".venv-build/", "weights/"):
+        assert entry in ignored, entry
