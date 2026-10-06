@@ -1003,11 +1003,13 @@ class MainWindow(QMainWindow):
     #: Artifact folders, newest layout first. Runs made before the dataset/ + qa/
     #: split keep working because the legacy location is still searched.
     ARTIFACT_LOCATIONS = {
-        "overlays": ("qa/overlays", "overlays"),
-        "comparisons": ("qa/comparisons", "comparisons"),
-        "masks": ("qa/masks", "masks"),
-        "review_previews": ("qa/review_previews", "review_previews"),
-        "reports": ("qa/reports", "reports"),
+        "overlays": ("_debug_and_logs/overlays", "qa/overlays", "overlays"),
+        "comparisons": ("_debug_and_logs/comparisons", "qa/comparisons", "comparisons"),
+        "masks": ("_debug_and_logs/masks", "qa/masks", "masks"),
+        "review_previews": (
+            "_debug_and_logs/review_previews", "qa/review_previews", "review_previews",
+        ),
+        "reports": ("_debug_and_logs/reports", "qa/reports", "reports"),
         "dataset": ("dataset", "."),
     }
 

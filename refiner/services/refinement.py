@@ -172,7 +172,7 @@ class SmartRefinementEngine:
         # conversion exists to produce were indistinguishable from 900 MB of
         # review imagery. Now: dataset/ is what you train on, qa/ can be deleted.
         self.dataset_dir = self.output_root / "dataset"
-        self.qa_dir = self.output_root / "qa"
+        self.qa_dir = self.output_root / "_debug_and_logs"
         self.report_dir = self.qa_dir / "reports"
         self.mask_dir = self.qa_dir / "masks"
         self.preview_dir = self.qa_dir / "review_previews"
@@ -315,18 +315,22 @@ class SmartRefinementEngine:
     README_TEXT = """Filter Annotation Refiner output
 ================================
 
-dataset/   The segmentation dataset. This is what you train on.
-           dataset/data.yaml is ready for Ultralytics:
-               yolo segment train data=dataset/data.yaml model=yolo11n-seg.pt
+dataset/            OPERATOR DIRECTORY - the segmentation dataset.
+                    This is what you train on.
+    images/         refined dataset images
+    labels/         refined SAM polygon labels (.txt)
+    data.yaml       retraining configuration
 
-qa/        Quality-assurance material only. Safe to delete once you are happy
-           with the conversion; nothing here is needed for training.
-           overlays/         every image with its mask drawn
-           comparisons/      input detection boxes beside the masks produced
-           masks/            per-instance PNG masks
-           review_previews/  uncertain images only
-           reports/          objects.csv, review_queue.csv, failures.csv,
-                             summary.json
+        yolo segment train data=dataset/data.yaml model=yolo11n-seg.pt
+
+_debug_and_logs/    ENGINEERING / AUDIT DIRECTORY.
+                    Safe to delete once you are happy with the conversion;
+                    nothing here is needed for training.
+    comparisons/      bbox vs SAM comparison renders
+    masks/            binary mask renders
+    overlays/         visual verification overlays
+    reports/          uncertainty & quality summary metrics
+    review_previews/  inspection previews for uncertain images
 
 Source labels were never modified.
 """

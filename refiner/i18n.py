@@ -129,7 +129,7 @@ EN: dict[str, str] = {
     "review.note": (
         "Only uncertain masks are placed here. High-quality masks are already saved as polygon "
         "labels. Review is a safety net, not the primary workflow. Every converted image also "
-        "gets a mask overlay in the output's overlays/ folder for manual checking."
+        "gets a mask overlay in the output's _debug_and_logs/overlays/ folder for manual checking."
     ),
     "review.refresh": "Refresh",
     "review.open.overlays": "Open Overlays",
@@ -161,7 +161,7 @@ EN: dict[str, str] = {
     ),
     "review.summary.stopped": "Stopped early — ",
     "review.nooverlay": (
-        "No saved overlay found for {image}.\nLooked under {root}/overlays and /review_previews.\n"
+        "No saved overlay found for {image}.\nLooked under {root}/_debug_and_logs/overlays and /review_previews.\n"
         "This usually means the review queue is from a different run than the currently loaded "
         "dataset and output folder."
     ),
@@ -253,7 +253,7 @@ ZH: dict[str, str] = {
     "dataset.layout": "目錄結構：{layout}。",
     "dataset.ready": "✓ 就緒：可轉換 {images} 張影像、{objects} 個物件。",
     "dataset.background": "{count} 張無物件的背景影像將被複製並產生空白標註。",
-    "dataset.skipped": "{count} 張有問題的影像將被略過，並記錄於 qa/reports/failures.csv。",
+    "dataset.skipped": "{count} 張有問題的影像將被略過，並記錄於 _debug_and_logs/reports/failures.csv。",
     "dataset.nonames": "找不到類別名稱（缺少 data.yaml 或 classes.txt）—— 將自動產生類別名稱。",
     "dataset.noobjects": "找不到任何物件。請確認標註檔與影像位於同一目錄，或位於對應的 labels/ 資料夾中。",
     "dataset.allbad": "全部 {count} 張影像皆有檢查問題，無法進行轉換。",
@@ -319,7 +319,7 @@ ZH: dict[str, str] = {
     "review.title": "審閱佇列與匯出",
     "review.note": (
         "此處僅列出不確定的遮罩。高品質遮罩已儲存為多邊形標註。審閱是安全網，而非主要流程。"
-        "每張已轉換的影像在輸出目錄的 qa/overlays/ 資料夾中都有遮罩疊圖，可供人工檢查。"
+        "每張已轉換的影像在輸出目錄的 _debug_and_logs/overlays/ 資料夾中都有遮罩疊圖，可供人工檢查。"
     ),
     "review.refresh": "重新整理",
     "review.open.overlays": "開啟疊圖",
@@ -354,7 +354,7 @@ ZH: dict[str, str] = {
     ),
     "review.summary.stopped": "提前停止 —— ",
     "review.nooverlay": (
-        "找不到 {image} 的疊圖。\n已於 {root} 下的 qa/overlays 與 qa/review_previews 中尋找。\n"
+        "找不到 {image} 的疊圖。\n已於 {root} 下的 _debug_and_logs/overlays 與 _debug_and_logs/review_previews 中尋找。\n"
         "這通常表示審閱佇列來自與目前載入的資料集和輸出目錄不同的另一次執行。"
     ),
 

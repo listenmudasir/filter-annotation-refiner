@@ -236,7 +236,7 @@ def test_overlay_is_saved_for_every_image(qapp, window, tmp_path):
     window.output_edit.setText(str(out))
     run_conversion(qapp, window)
 
-    overlays = sorted((out / "qa" / "overlays" / "images" / "train").glob("*.jpg"))
+    overlays = sorted((out / "_debug_and_logs" / "overlays" / "images" / "train").glob("*.jpg"))
     assert len(overlays) == 3, "an overlay must be written for every converted image"
     for path in overlays:
         with Image.open(path) as img:
@@ -249,7 +249,7 @@ def test_overlays_can_be_switched_off(qapp, window, tmp_path):
     window.output_edit.setText(str(out))
     window.chk_overlays.setChecked(False)
     run_conversion(qapp, window)
-    assert not (out / "qa" / "overlays").exists()
+    assert not (out / "_debug_and_logs" / "overlays").exists()
     assert sorted((out / "dataset" / "labels" / "train").glob("*.txt"))
 
 
@@ -260,7 +260,7 @@ def test_review_table_matches_the_queue_file(qapp, window, tmp_path):
     window.accept_spin.setValue(0.99)
     run_conversion(qapp, window)
 
-    queue = (out / "qa" / "reports" / "review_queue.csv").read_text().strip().splitlines()
+    queue = (out / "_debug_and_logs" / "reports" / "review_queue.csv").read_text().strip().splitlines()
     assert window.review_table.rowCount() == len(queue) - 1 > 0
     assert "uncertain object" in window.review_status.text()
     # Refreshing the queue must not clobber the run summary.
@@ -343,7 +343,7 @@ def test_open_folder_buttons_point_at_real_paths(qapp, window, tmp_path, monkeyp
         if a.data() and a.data()[1] == "overlays"
     )
     overlays_action.trigger()
-    assert opened == [str(out / "dataset"), str(out / "qa" / "overlays")]
+    assert opened == [str(out / "dataset"), str(out / "_debug_and_logs" / "overlays")]
     assert all(Path(p).exists() for p in opened)
 
 
@@ -364,9 +364,9 @@ def test_legacy_flat_output_is_still_readable(qapp, window, tmp_path):
 def test_new_layout_is_preferred_over_legacy(qapp, window, tmp_path):
     out = tmp_path / "both"
     (out / "overlays").mkdir(parents=True)
-    (out / "qa" / "overlays").mkdir(parents=True)
+    (out / "_debug_and_logs" / "overlays").mkdir(parents=True)
     window.output_root = out
-    assert window._artifact_dir("overlays") == (out / "qa" / "overlays").resolve()
+    assert window._artifact_dir("overlays") == (out / "_debug_and_logs" / "overlays").resolve()
 
 
 def seed_other_backend_output(ds_path: Path, out: Path) -> None:

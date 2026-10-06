@@ -34,9 +34,9 @@ def test_fallback_end_to_end(tmp_path: Path):
     line = result.output_label.read_text().strip().split()
     assert len(line) > 7
     assert (out / "dataset" / "images" / "train" / "x.jpg").exists()
-    assert (out / "qa" / "reports" / "objects.csv").exists()
+    assert (out / "_debug_and_logs" / "reports" / "objects.csv").exists()
 
-    rows = list(csv.DictReader((out / "qa" / "reports" / "objects.csv").open(encoding="utf-8")))
+    rows = list(csv.DictReader((out / "_debug_and_logs" / "reports" / "objects.csv").open(encoding="utf-8")))
     assert len(rows) == 1
     assert float(rows[0]["fidelity"]) > 0.95
     assert rows[0]["parts"] == "1"
@@ -176,7 +176,7 @@ def test_comparison_images_are_written(tmp_path: Path):
     engine.process_record(ds.records[0], resume=False)
     assert engine.wait_for_writes() == []
 
-    comparisons = list((out / "qa" / "comparisons").rglob("*.jpg"))
+    comparisons = list((out / "_debug_and_logs" / "comparisons").rglob("*.jpg"))
     assert len(comparisons) == 1
     with Image.open(comparisons[0]) as img:
         # Two panels side by side, so wider than tall relative to the source.
@@ -193,7 +193,7 @@ def test_comparisons_can_be_disabled(tmp_path: Path):
     )
     engine.process_record(ds.records[0], resume=False)
     assert engine.wait_for_writes() == []
-    assert not (out / "qa" / "comparisons").exists()
+    assert not (out / "_debug_and_logs" / "comparisons").exists()
 
 
 def test_background_writers_produce_the_same_files(tmp_path: Path):
@@ -247,7 +247,7 @@ def test_report_schema_mismatch_is_refused(tmp_path: Path):
     src = make_dataset(tmp_path)
     ds = scan_dataset(src)
     out = tmp_path / "out"
-    reports = out / "qa" / "reports"
+    reports = out / "_debug_and_logs" / "reports"
     reports.mkdir(parents=True)
     (reports / "objects.csv").write_text("image,instance,quality\n")
 
