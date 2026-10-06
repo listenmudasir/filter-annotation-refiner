@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-import app as app_module
+from refiner import cli as app_module
 from refiner.backend.fallback import FallbackBackend
 from refiner.backend.sam2_backend import Sam2Backend
 from refiner.backend.sam3_backend import Sam3Backend
@@ -20,7 +20,7 @@ BACKENDS = ["sam2", "sam3", "fallback"]
 @pytest.fixture
 def argv(monkeypatch):
     def _set(*args):
-        monkeypatch.setattr(sys, "argv", ["app.py", *args])
+        monkeypatch.setattr(sys, "argv", ["filter-annotation-refiner", *args])
     return _set
 
 
@@ -150,3 +150,44 @@ def test_missing_sam2_names_what_was_searched(tmp_path, monkeypatch):
 
 def _raise_import_error(name, *a, **k):
     raise ImportError(name)
+
+
+def test_version_declarations_agree():
+    """VERSION and pyproject drifted (1.1.0 vs 1.0.0); a release needs one number."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    version_file = (root / "VERSION").read_text(encoding="utf-8").strip()
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert version_file == pyproject["project"]["version"]
+
+
+def test_console_script_is_declared():
+    """pip install must expose a runnable command, not just the package."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    scripts = pyproject["project"]["scripts"]
+    assert scripts["filter-annotation-refiner"] == "refiner.cli:main"
+    # And every runtime dependency is declared, not only in requirements.txt.
+    deps = " ".join(pyproject["project"]["dependencies"]).lower()
+    for package in ("pyside6", "numpy", "pillow", "opencv", "pyyaml"):
+        assert package in deps, package
+
+
+def test_every_package_subdir_is_shipped():
+    """A missing entry here silently omits a subpackage from the wheel."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    declared = set(tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+                   ["tool"]["setuptools"]["packages"])
+    found = {"refiner"} | {
+        f"refiner.{p.name}" for p in (root / "refiner").iterdir()
+        if p.is_dir() and (p / "__init__.py").exists()
+    }
+    assert found <= declared, f"not shipped: {found - declared}"

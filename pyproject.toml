@@ -4,11 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "filter-annotation-refiner"
-version = "1.0.0"
+version = "1.2.0"
 description = "Dataset-level YOLO bounding-box to SAM polygon segmentation refinement workstation"
 requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "MIT"}
+dependencies = [
+    "PySide6>=6.8,<7",
+    "numpy>=1.26,<2",
+    "Pillow>=10,<13",
+    "opencv-python>=4.9,<4.12",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# SAM 2 is not on PyPI; install from its repository or point $SAM2_REPO at a
+# checkout. Listed here so the extra documents the requirement.
+sam3 = ["einops>=0.8", "pycocotools>=2.0.7"]
+dev = ["pytest>=8", "pyflakes>=3"]
+
+[project.scripts]
+filter-annotation-refiner = "refiner.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/listenmudasir/filter-annotation-refiner"
+Issues = "https://github.com/listenmudasir/filter-annotation-refiner/issues"
+
+[tool.setuptools]
+packages = ["refiner", "refiner.backend", "refiner.services", "refiner.ui"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
