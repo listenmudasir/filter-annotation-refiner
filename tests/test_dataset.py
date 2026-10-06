@@ -130,3 +130,41 @@ def test_polygon_source_labels_are_recognised(tmp_path: Path):
     ds = scan_dataset(tmp_path)
     assert ds.polygon_count == 1
     assert ds.detection_count == 0
+
+
+def test_generated_output_is_detected(tmp_path: Path):
+    """Converting an output back into a new dataset must be detectable.
+
+    A generated dataset is a structurally valid YOLO dataset, so nothing else
+    distinguishes it from a real source.
+    """
+    from refiner.dataset import generated_output_marker
+
+    out = tmp_path / "ds_sam_refined"
+    (out / ".sam_refiner").mkdir(parents=True)
+    (out / ".sam_refiner" / "state.json").write_text("{}")
+    assert generated_output_marker(out) is not None
+    # Also when pointed at a subfolder of the output, which is the usual mistake.
+    sub = out / "defect"
+    sub.mkdir()
+    assert generated_output_marker(sub) is not None
+
+
+def test_output_without_state_dir_is_still_detected(tmp_path: Path):
+    from refiner.dataset import generated_output_marker
+
+    out = tmp_path / "copied_output"
+    (out / "reports").mkdir(parents=True)
+    (out / "reports" / "summary.json").write_text("{}")
+    (out / "overlays").mkdir()
+    assert generated_output_marker(out) is not None
+
+
+def test_real_source_dataset_is_not_flagged(tmp_path: Path):
+    from refiner.dataset import generated_output_marker
+
+    src = tmp_path / "real"
+    image(src / "images" / "a.jpg")
+    (src / "labels").mkdir()
+    (src / "labels" / "a.txt").write_text("0 0.5 0.5 0.4 0.4\n")
+    assert generated_output_marker(src) is None

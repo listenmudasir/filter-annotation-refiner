@@ -119,6 +119,28 @@ def infer_label_path(root: Path, image_path: Path) -> Path:
     return candidates[0]
 
 
+def generated_output_marker(root: Path) -> Path | None:
+    """Path proving ``root`` is (or sits inside) a dataset this tool generated.
+
+    Converting an output back into a new dataset silently compounds error: run 2
+    segments run 1's masks rather than the originals, and the trees nest
+    (out/defect_sam_refined/comparisons/labels/...). Nothing else detects it,
+    because a generated dataset is a structurally valid YOLO dataset.
+    """
+    root = Path(root).expanduser()
+    for folder in (root, *root.parents):
+        marker = folder / ".sam_refiner" / "state.json"
+        if marker.exists():
+            return marker
+        # A tree copied without its state dir still carries these.
+        summary = folder / "reports" / "summary.json"
+        if summary.exists() and (folder / "overlays").is_dir():
+            return summary
+        if folder == folder.parent:
+            break
+    return None
+
+
 def detect_layout(root: Path, records: list[ImageRecord]) -> str:
     """Human-readable description of how labels were found, for the UI."""
     if not records:

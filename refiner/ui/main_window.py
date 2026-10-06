@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ..dataset import class_histogram, scan_dataset
+from ..dataset import class_histogram, generated_output_marker, scan_dataset
 from ..models import DatasetIndex
 from ..services.refinement import (
     ConversionSettings, RecordOutcome, describe_output_conflict, suggest_free_output,
@@ -394,6 +394,7 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.chk_comparisons)
         self.chk_previews = QCheckBox(); self.chk_previews.setChecked(True); sl.addWidget(self.chk_previews)
         self.chk_links = QCheckBox(); self.chk_links.setChecked(True); sl.addWidget(self.chk_links)
+        self.chk_resume = QCheckBox(); self.chk_resume.setChecked(True); sl.addWidget(self.chk_resume)
 
         sl.addSpacing(4); self.output_caption = QLabel(); sl.addWidget(self.output_caption)
         out_row = QHBoxLayout()
@@ -428,7 +429,8 @@ class MainWindow(QMainWindow):
         self.r_accepted = MetricCard("", "0")
         self.r_review = MetricCard("", "0")
         self.r_failed = MetricCard("", "0")
-        for card in [self.r_objects, self.r_accepted, self.r_review, self.r_failed]: rl.addWidget(card)
+        self.r_skipped = MetricCard("", "0")
+        for card in [self.r_objects, self.r_accepted, self.r_review, self.r_failed, self.r_skipped]: rl.addWidget(card)
         self.backend_info = QLabel()
         self.backend_info.setObjectName("Muted"); rl.addWidget(self.backend_info)
         rl.addStretch(1)
@@ -464,6 +466,8 @@ class MainWindow(QMainWindow):
         self.chk_comparisons.setText(tr("convert.save.comparisons"))
         self.chk_previews.setText(tr("convert.save.previews"))
         self.chk_links.setText(tr("convert.save.links"))
+        self.chk_resume.setText(tr("convert.resume.skip"))
+        self.chk_resume.setToolTip(tr("convert.resume.tip"))
         self.output_caption.setText(tr("convert.output"))
         self.browse_btn.setText(tr("convert.browse"))
         self.output_hint.setText(tr("convert.output.hint"))
@@ -477,6 +481,7 @@ class MainWindow(QMainWindow):
             (self.r_accepted, "convert.metric.accepted"),
             (self.r_review, "convert.metric.review"),
             (self.r_failed, "convert.metric.failed"),
+            (self.r_skipped, "convert.metric.skipped"),
         ):
             card.set_label(tr(key))
         self.pause_btn.setText(
@@ -651,6 +656,9 @@ class MainWindow(QMainWindow):
         convertible = [r for r in ds.convertible_records if r.annotations]
 
         bits = [tr("dataset.layout", layout=ds.layout)]
+        marker = generated_output_marker(ds.root)
+        if marker is not None:
+            bits.append(tr("dataset.isoutput", marker=marker.parent.parent))
         if convertible:
             bits.append(tr("dataset.ready", images=len(convertible), objects=ds.object_count))
             if ds.background_count:
@@ -697,6 +705,18 @@ class MainWindow(QMainWindow):
             )
             return
 
+        marker = generated_output_marker(self.dataset.root)
+        if marker is not None:
+            answer = QMessageBox.warning(
+                self,
+                tr("dataset.isoutput.title"),
+                tr("dataset.isoutput.body", source=self.dataset.root, marker=marker),
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
         output = self._resolve_output_conflict(output)
         if output is None:
             return
@@ -707,7 +727,7 @@ class MainWindow(QMainWindow):
         self._run_started_at = None; self._run_started_index = 0
         self.throughput_text.setText(tr("convert.estimating"))
         self.worker_thread = QThread(self)
-        self.worker = ConversionWorker(self.dataset, output, self.backend_name, self._settings(), self.device, self.checkpoint, resume=True)
+        self.worker = ConversionWorker(self.dataset, output, self.backend_name, self._settings(), self.device, self.checkpoint, resume=self.chk_resume.isChecked())
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.progress.connect(self._on_progress)
@@ -857,14 +877,33 @@ class MainWindow(QMainWindow):
         self.progress.setMaximum(max(1, total)); self.progress.setValue(current); self.progress_text.setText(tr("convert.images", current=current, total=total))
         self._update_throughput(current, total)
         names = self.dataset.class_names if self.dataset else None
-        if isinstance(payload, RecordOutcome):
+        if isinstance(payload, RecordOutcome) and payload.skipped:
+            # Resume skips work already on disk, so there are no results to draw.
+            # Showing the record alone renders a bare box, which reads as a failed
+            # conversion; show the overlay the previous run wrote instead.
+            self._show_skipped_preview(payload.record)
+        elif isinstance(payload, RecordOutcome):
             self.preview.show_record(payload.record, payload.results, names)
         elif isinstance(payload, tuple) and payload:
             self.preview.show_record(payload[0], [], names)
 
+    def _show_skipped_preview(self, record) -> None:
+        """Show what a previous run produced for an image resume just skipped."""
+        names = self.dataset.class_names if self.dataset else None
+        saved = self._saved_overlay_for(record.relative_image.as_posix())
+        if saved is not None:
+            try:
+                with Image.open(saved) as img:
+                    self.preview.show_image(img.convert("RGB"), key=str(saved))
+                return
+            except Exception:
+                pass
+        self.preview.show_record(record, [], names)
+
     def _on_statistics(self, stats: dict) -> None:
         self.r_objects.set_value(stats.get("objects", 0)); self.r_accepted.set_value(stats.get("accepted", 0))
         self.r_review.set_value(stats.get("review", 0)); self.r_failed.set_value(stats.get("failed", 0))
+        self.r_skipped.set_value(stats.get("skipped", 0))
 
     def _on_worker_error(self, message: str) -> None:
         self.start_btn.setEnabled(True); self.pause_btn.setEnabled(False); self.stop_btn.setEnabled(False)
