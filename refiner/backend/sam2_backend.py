@@ -55,16 +55,40 @@ CONFIG_BY_CHECKPOINT = {
     "sam2_hiera_tiny": "configs/sam2/sam2_hiera_t.yaml",
 }
 
-#: Common places a SAM 2 checkout or checkpoint ends up. Searched only as a
-#: convenience; $SAM2_REPO / $SAM2_CHECKPOINT take precedence.
-_REPO_HINTS = (
-    "~/sam2",
-    "~/segment-anything-2",
-    "~/Downloads/sam2",
-    "~/Downloads/segment-anything-2",
-    "~/Desktop/sam2",
-    "~/桌面/sam2",  # Desktop on zh_CN locales
-)
+#: Where people actually keep checkouts. "桌面" is Desktop on zh_CN systems.
+_SEARCH_PARENTS = ("~", "~/Downloads", "~/Desktop", "~/桌面", "~/projects", "~/code", "~/src")
+
+#: Matched against directory names under those parents. Globs rather than exact
+#: names so forks and renamed clones (sam2_cell-main, sam2-main, segment-anything-2)
+#: are found without the user having to set SAM2_REPO.
+_REPO_GLOBS = ("sam2*", "SAM2*", "segment-anything-2*", "segment_anything_2*")
+
+
+def _candidate_repos() -> list[Path]:
+    """Directories that look like a SAM 2 checkout, most-specific first."""
+    found: list[Path] = []
+
+    env_repo = os.getenv("SAM2_REPO")
+    if env_repo:
+        found.append(Path(env_repo).expanduser())
+
+    for parent in _SEARCH_PARENTS:
+        base = Path(parent).expanduser()
+        if not base.is_dir():
+            continue
+        for pattern in _REPO_GLOBS:
+            try:
+                matches = sorted(base.glob(pattern))
+            except OSError:
+                continue
+            for path in matches:
+                if path.is_dir() and path not in found:
+                    found.append(path)
+    return found
+
+
+def _looks_like_checkout(path: Path) -> bool:
+    return (path / "sam2" / "__init__.py").exists()
 
 
 def _ensure_sam2_importable() -> None:
@@ -79,24 +103,23 @@ def _ensure_sam2_importable() -> None:
     except ImportError:
         pass
 
-    candidates = []
-    env_repo = os.getenv("SAM2_REPO")
-    if env_repo:
-        candidates.append(Path(env_repo).expanduser())
-    candidates += [Path(p).expanduser() for p in _REPO_HINTS]
+    searched = _candidate_repos()
+    for repo in searched:
+        if not _looks_like_checkout(repo):
+            continue
+        sys.path.insert(0, str(repo))
+        try:
+            importlib.import_module("sam2")
+            return
+        except ImportError:
+            sys.path.pop(0)
 
-    for repo in candidates:
-        if (repo / "sam2" / "__init__.py").exists():
-            sys.path.insert(0, str(repo))
-            try:
-                importlib.import_module("sam2")
-                return
-            except ImportError:
-                sys.path.pop(0)
-
+    looked_in = ", ".join(str(Path(p).expanduser()) for p in _SEARCH_PARENTS)
     raise RuntimeError(
-        "SAM 2 is not importable. Install it with "
-        "'pip install -e /path/to/sam2', or point SAM2_REPO at a local checkout."
+        "SAM 2 is not importable.\n"
+        "  • Install it:  pip install 'git+https://github.com/facebookresearch/sam2.git'\n"
+        "  • Or point at a local checkout:  export SAM2_REPO=/path/to/sam2\n"
+        f"Looked for sam2*/segment-anything-2* under: {looked_in}"
     )
 
 
@@ -114,11 +137,8 @@ def find_checkpoint(explicit: str | None = None) -> Path:
         if path.exists():
             return path
 
-    roots = [Path(p).expanduser() for p in _REPO_HINTS]
-    roots += [Path("~/.cache/sam2").expanduser(), Path.cwd()]
-    env_repo = os.getenv("SAM2_REPO")
-    if env_repo:
-        roots.insert(0, Path(env_repo).expanduser())
+    roots = _candidate_repos()
+    roots += [Path("~/.cache/sam2").expanduser(), Path("~/checkpoints").expanduser(), Path.cwd()]
 
     # Prefer the largest/most capable variant when several are present.
     preference = list(CONFIG_BY_CHECKPOINT)

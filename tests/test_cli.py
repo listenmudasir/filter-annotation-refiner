@@ -81,3 +81,72 @@ def test_main_window_default_backend_matches_cli(argv):
     cli_default = app_module.parse_args().backend
     gui_default = inspect.signature(MainWindow.__init__).parameters["backend_name"].default
     assert gui_default == cli_default
+
+
+# --------------------------------------------------------------------------- #
+# SAM 2 discovery
+# --------------------------------------------------------------------------- #
+
+
+def make_checkout(root, name: str):
+    """A directory that looks like a SAM 2 clone."""
+    repo = root / name
+    (repo / "sam2").mkdir(parents=True)
+    (repo / "sam2" / "__init__.py").write_text("")
+    return repo
+
+
+def test_discovery_matches_renamed_forks(tmp_path, monkeypatch):
+    """A clone named sam2_cell-main or sam2-main must be found, not just 'sam2'."""
+    from refiner.backend import sam2_backend as sb
+
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    for name in ("sam2_cell-main", "sam2-main", "segment-anything-2-main"):
+        make_checkout(desktop, name)
+
+    monkeypatch.delenv("SAM2_REPO", raising=False)
+    monkeypatch.setattr(sb, "_SEARCH_PARENTS", (str(desktop),))
+    found = {p.name for p in sb._candidate_repos() if sb._looks_like_checkout(p)}
+    assert found == {"sam2_cell-main", "sam2-main", "segment-anything-2-main"}
+
+
+def test_env_var_takes_precedence(tmp_path, monkeypatch):
+    from refiner.backend import sam2_backend as sb
+
+    explicit = make_checkout(tmp_path, "mine")
+    other = tmp_path / "other"
+    other.mkdir()
+    make_checkout(other, "sam2")
+
+    monkeypatch.setenv("SAM2_REPO", str(explicit))
+    monkeypatch.setattr(sb, "_SEARCH_PARENTS", (str(other),))
+    assert sb._candidate_repos()[0] == explicit
+
+
+def test_non_checkout_directories_are_ignored(tmp_path, monkeypatch):
+    from refiner.backend import sam2_backend as sb
+
+    base = tmp_path / "d"
+    (base / "sam2_notes").mkdir(parents=True)  # name matches, but no package
+    monkeypatch.delenv("SAM2_REPO", raising=False)
+    monkeypatch.setattr(sb, "_SEARCH_PARENTS", (str(base),))
+    assert [p for p in sb._candidate_repos() if sb._looks_like_checkout(p)] == []
+
+
+def test_missing_sam2_names_what_was_searched(tmp_path, monkeypatch):
+    from refiner.backend import sam2_backend as sb
+
+    monkeypatch.delenv("SAM2_REPO", raising=False)
+    monkeypatch.setattr(sb, "_SEARCH_PARENTS", (str(tmp_path),))
+    monkeypatch.setattr(sb.importlib, "import_module", _raise_import_error)
+    with pytest.raises(RuntimeError) as excinfo:
+        sb._ensure_sam2_importable()
+    message = str(excinfo.value)
+    assert "pip install" in message
+    assert "SAM2_REPO" in message
+    assert str(tmp_path) in message, "the error must say where it looked"
+
+
+def _raise_import_error(name, *a, **k):
+    raise ImportError(name)
